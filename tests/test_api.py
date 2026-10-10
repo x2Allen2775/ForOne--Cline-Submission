@@ -44,6 +44,21 @@ def test_health_endpoint():
     assert "model" in body
 
 
+def test_root_serves_web_ui():
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "text/html" in r.headers.get("content-type", "")
+    assert "Anemia-Screen" in r.text
+
+
+def test_docs_served_with_local_assets():
+    r = client.get("/docs")
+    assert r.status_code == 200
+    # Must reference the LOCAL swagger assets, not an external CDN.
+    assert "/static/swagger-ui-bundle.js" in r.text
+    assert "cdn.jsdelivr.net" not in r.text
+
+
 def test_analyze_good_image_returns_ok_report():
     meta = {"age_months": 300, "sex": "female", "symptoms": ["fatigue"]}
     files = {"image": ("good.png", io.BytesIO(_png_bytes()), "image/png")}

@@ -87,9 +87,10 @@ pip install -r requirements.txt
 # 2) Generate synthetic demo images (works before you download real data)
 python -m scripts.make_sample_images
 
-# 3) Run the API
+# 3) Run the API + web UI
 uvicorn app.main:app --reload
-# → open http://127.0.0.1:8000/docs  (interactive Swagger)
+# → open http://127.0.0.1:8000/        (self-contained web UI — upload & triage)
+# → open http://127.0.0.1:8000/docs    (interactive Swagger, served offline)
 
 # 4) Analyze one image (micro demo)
 curl -s -X POST http://127.0.0.1:8000/analyze \
@@ -108,8 +109,11 @@ python -m scripts.batch_process --mode local --input data/sample --out outputs/t
 ```
 anemia-screen/
 ├── app/                      # FastAPI service + pipeline stages
-│   ├── main.py               # POST /analyze, GET /health, Swagger /docs
+│   ├── main.py               # web UI (/), POST /analyze, GET /health, offline /docs
+│   ├── static/               # self-contained web UI (index.html, app.js) + vendored Swagger assets
 │   ├── config.py             # all tunable thresholds (env-overridable)
+│   ├── clinical_config.yaml  # WHO/MoHFW Hb bands + triage params (config-driven)
+│   ├── clinical.py           # clinical config loader
 │   ├── schemas.py            # Pydantic request/response contracts
 │   └── pipeline/
 │       ├── quality_gate.py   # blur/brightness/tissue checks

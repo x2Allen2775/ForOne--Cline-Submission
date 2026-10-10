@@ -14,9 +14,12 @@ Endpoints:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from app import __version__
@@ -24,6 +27,8 @@ from app.config import settings
 from app.pipeline import preprocessing
 from app.pipeline.orchestrator import analyze_image
 from app.schemas import PatientMetadata, TriageReport
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 app = FastAPI(
     title="Anemia-Screen Pipeline",
@@ -35,7 +40,26 @@ app = FastAPI(
         "explainability, and a WHO clinical rules engine to return an actionable "
         "triage report."
     ),
+    # Disable the default CDN-backed docs; we serve an offline version below.
+    docs_url=None,
+    redoc_url=None,
 )
+
+# Serve the self-contained web UI assets (no internet/CDN required).
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.get("/docs", include_in_schema=False)
+def swagger_docs():
+    """Swagger UI served from LOCAL assets (works offline, no CDN)."""
+    from fastapi.openapi.docs import get_swagger_ui_html
+
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url,
+        title=f"{app.title} · API docs",
+        swagger_js_url="/static/swagger-ui-bundle.js",
+        swagger_css_url="/static/swagger-ui.css",
+    )
 
 # Permissive CORS so a notebook / local dashboard can call the API during demos.
 app.add_middleware(
@@ -101,10 +125,18 @@ async def analyze(
     return analyze_image(bgr, patient, with_gradcam=with_gradcam)
 
 
-@app.get("/", tags=["system"])
-def root() -> dict:
+@app.get("/", include_in_schema=False)
+def root() -> FileResponse:
+    """Serve the self-contained web UI (works fully offline, no CDN)."""
+    return FileResponse(str(STATIC_DIR / "index.html"))
+
+
+@app.get("/api", tags=["system"])
+def api_info() -> dict:
+    """Machine-readable API index."""
     return {
         "name": "Anemia-Screen Pipeline",
+        "ui": "/",
         "docs": "/docs",
         "health": "/health",
         "analyze": "POST /analyze (multipart: image + metadata)",
