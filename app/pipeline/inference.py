@@ -53,11 +53,22 @@ def build_model(num_classes: int | None = None) -> torch.nn.Module:
     return model
 
 
-class AnemiaClassifier:
-    """MobileNetV3-based anemia risk classifier with graceful fallback."""
+def _checkpoint_for(modality: str) -> Path:
+    """Resolve the checkpoint path for a given modality (eye/palm)."""
+    if modality == "palm":
+        return Path(settings.palm_checkpoint_path)
+    return Path(settings.eye_checkpoint_path)
 
-    def __init__(self, device: str | None = None):
+
+class AnemiaClassifier:
+    """MobileNetV3-based anemia risk classifier with graceful fallback.
+
+    One instance per modality ('eye' = conjunctiva, 'palm' = palm/nail bed).
+    """
+
+    def __init__(self, device: str | None = None, modality: str = "eye"):
         self.device = resolve_device(device)
+        self.modality = modality
         self.class_names = list(settings.class_names)
         self.trained = False
         self._model: torch.nn.Module | None = None
@@ -65,7 +76,7 @@ class AnemiaClassifier:
 
     # ── loading ────────────────────────────────────────────────────────────────
     def _load(self) -> None:
-        ckpt = Path(settings.checkpoint_path)
+        ckpt = _checkpoint_for(self.modality)
         self._model = build_model()
         if ckpt.exists():
             try:
@@ -114,13 +125,12 @@ class AnemiaClassifier:
         )
 
 
-# ── module-level singleton (lazy) ───────────────────────────────────────────────
-_classifier: AnemiaClassifier | None = None
+# ── module-level singletons (lazy, one per modality) ─────────────────────────────
+_classifiers: dict[str, AnemiaClassifier] = {}
 
 
-def get_classifier() -> AnemiaClassifier:
-    """Return a lazily-instantiated shared classifier."""
-    global _classifier
-    if _classifier is None:
-        _classifier = AnemiaClassifier()
-    return _classifier
+def get_classifier(modality: str = "eye") -> AnemiaClassifier:
+    """Return a lazily-instantiated shared classifier for the given modality."""
+    if modality not in _classifiers:
+        _classifiers[modality] = AnemiaClassifier(modality=modality)
+    return _classifiers[modality]

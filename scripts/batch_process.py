@@ -64,7 +64,8 @@ def _rows_from_report(img_name: str, report: dict) -> dict:
     }
 
 
-def run_api(images: list[Path], url: str, default_meta: dict, with_gradcam: bool) -> list[dict]:
+def run_api(images: list[Path], url: str, default_meta: dict, with_gradcam: bool,
+            modality: str = "eye") -> list[dict]:
     import requests
 
     rows = []
@@ -72,7 +73,11 @@ def run_api(images: list[Path], url: str, default_meta: dict, with_gradcam: bool
         meta = _load_metadata(p, default_meta)
         with open(p, "rb") as fh:
             files = {"image": (p.name, fh, "application/octet-stream")}
-            data = {"metadata": json.dumps(meta), "with_gradcam": str(with_gradcam).lower()}
+            data = {
+                "metadata": json.dumps(meta),
+                "with_gradcam": str(with_gradcam).lower(),
+                "modality": modality,
+            }
             resp = requests.post(url, files=files, data=data, timeout=120)
         if resp.status_code != 200:
             print(f"[batch] {p.name}: HTTP {resp.status_code} {resp.text[:160]}")
@@ -84,7 +89,8 @@ def run_api(images: list[Path], url: str, default_meta: dict, with_gradcam: bool
     return rows
 
 
-def run_local(images: list[Path], default_meta: dict, with_gradcam: bool) -> list[dict]:
+def run_local(images: list[Path], default_meta: dict, with_gradcam: bool,
+              modality: str = "eye") -> list[dict]:
     from app.imageio import read_image
     from app.pipeline.orchestrator import analyze_image
     from app.schemas import PatientMetadata
@@ -97,7 +103,8 @@ def run_local(images: list[Path], default_meta: dict, with_gradcam: bool) -> lis
         except Exception:
             rows.append({"image": p.name, "status": "error_decode"})
             continue
-        report = analyze_image(bgr, PatientMetadata(**meta), with_gradcam=with_gradcam)
+        report = analyze_image(bgr, PatientMetadata(**meta), with_gradcam=with_gradcam,
+                               modality=modality)
         rows.append(_rows_from_report(p.name, report.model_dump()))
         print(f"[batch] {p.name}: {rows[-1].get('risk_class','?')} "
               f"({rows[-1].get('urgency','?')})")
@@ -111,6 +118,8 @@ def main() -> int:
     ap.add_argument("--mode", choices=["api", "local"], default="api")
     ap.add_argument("--url", default="http://127.0.0.1:8000/analyze")
     ap.add_argument("--metadata-json", default="{}", help="Default metadata JSON for all images.")
+    ap.add_argument("--modality", choices=["eye", "palm"], default="eye",
+                    help="eye=conjunctiva (default), palm=palm/nail-bed images.")
     ap.add_argument("--no-gradcam", action="store_true", help="Skip heatmaps (faster).")
     args = ap.parse_args()
 
@@ -122,11 +131,12 @@ def main() -> int:
     default_meta = json.loads(args.metadata_json)
     with_gradcam = not args.no_gradcam
 
-    print(f"[batch] processing {len(images)} images in '{args.mode}' mode...")
+    print(f"[batch] processing {len(images)} images in '{args.mode}' mode "
+          f"(modality={args.modality})...")
     if args.mode == "api":
-        rows = run_api(images, args.url, default_meta, with_gradcam)
+        rows = run_api(images, args.url, default_meta, with_gradcam, args.modality)
     else:
-        rows = run_local(images, default_meta, with_gradcam)
+        rows = run_local(images, default_meta, with_gradcam, args.modality)
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)

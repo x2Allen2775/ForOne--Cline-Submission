@@ -24,9 +24,14 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from app.config import settings
+from app.config import settings, PROJECT_ROOT
 from app.pipeline.inference import build_model, resolve_device
-from ml.dataset import AnemiaDataset, load_manifest, patient_wise_split
+from ml.dataset import (
+    AnemiaDataset,
+    load_manifest,
+    load_manifest_csv,
+    patient_wise_split,
+)
 
 
 def _class_weights(labels: list[int], num_classes: int) -> torch.Tensor:
@@ -53,14 +58,33 @@ def evaluate(model, loader, device) -> tuple[float, float]:
     return loss_sum / max(1, total), correct / max(1, total)
 
 
+def _default_manifest(modality: str) -> Path:
+    return PROJECT_ROOT / "data" / "manifests" / f"{modality}.csv"
+
+
+def _default_ckpt(modality: str) -> Path:
+    return Path(
+        settings.palm_checkpoint_path if modality == "palm"
+        else settings.eye_checkpoint_path
+    )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Train anemia MobileNetV3 classifier.")
-    ap.add_argument("--data-dir", default="data/raw")
+    ap.add_argument("--modality", choices=["eye", "palm"], default="eye",
+                    help="Which model to train (eye=conjunctiva, palm=palm/nail).")
+    ap.add_argument("--manifest", default=None,
+                    help="Manifest CSV (default: data/manifests/<modality>.csv).")
+    ap.add_argument("--data-dir", default=None,
+                    help="Legacy: a folder containing labels.csv (overrides --manifest).")
+    ap.add_argument("--out", default=None, help="Checkpoint output path.")
     ap.add_argument("--epochs", type=int, default=15)
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--val-frac", type=float, default=0.2)
     ap.add_argument("--num-workers", type=int, default=2)
+    ap.add_argument("--limit", type=int, default=None,
+                    help="Cap total samples (quick smoke training).")
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
@@ -68,15 +92,27 @@ def main() -> None:
     np.random.seed(args.seed)
 
     device = resolve_device()
-    print(f"[train] device = {device}")
+    print(f"[train] modality={args.modality} device={device}")
 
-    samples = load_manifest(args.data_dir)
+    if args.data_dir:
+        samples = load_manifest(args.data_dir)
+    else:
+        manifest = Path(args.manifest) if args.manifest else _default_manifest(args.modality)
+        samples = load_manifest_csv(manifest)
+        print(f"[train] loaded {len(samples)} samples from {manifest}")
+
+    if args.limit and len(samples) > args.limit:
+        rng = np.random.default_rng(args.seed)
+        idx = rng.choice(len(samples), args.limit, replace=False)
+        samples = [samples[i] for i in idx]
+        print(f"[train] limited to {len(samples)} samples (--limit)")
+
     train_s, val_s = patient_wise_split(samples, args.val_frac, args.seed)
     print(f"[train] {len(train_s)} train / {len(val_s)} val samples "
           f"({len({s.patient_id for s in samples})} patients)")
 
-    train_ds = AnemiaDataset(train_s, train=True)
-    val_ds = AnemiaDataset(val_s, train=False)
+    train_ds = AnemiaDataset(train_s, train=True, modality=args.modality, seed=args.seed)
+    val_ds = AnemiaDataset(val_s, train=False, modality=args.modality, seed=args.seed)
     train_dl = DataLoader(
         train_ds, batch_size=args.batch_size, shuffle=True,
         num_workers=args.num_workers, drop_last=False,
@@ -92,7 +128,7 @@ def main() -> None:
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
-    ckpt_path = Path(settings.checkpoint_path)
+    ckpt_path = Path(args.out) if args.out else _default_ckpt(args.modality)
     ckpt_path.parent.mkdir(parents=True, exist_ok=True)
     best_acc = 0.0
 
@@ -120,6 +156,7 @@ def main() -> None:
                     "model": model.state_dict(),
                     "arch": settings.model_arch,
                     "classes": list(settings.class_names),
+                    "modality": args.modality,
                     "val_acc": val_acc,
                     "epoch": epoch,
                 },

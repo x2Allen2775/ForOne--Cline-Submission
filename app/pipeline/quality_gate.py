@@ -82,7 +82,7 @@ def _glare_fraction(bgr: np.ndarray) -> float:
     return float(np.count_nonzero(glare)) / float(glare.size)
 
 
-def assess_quality(image: np.ndarray) -> QualityReport:
+def assess_quality(image: np.ndarray, modality: str = "eye") -> QualityReport:
     """
     Evaluate an image and decide whether it is fit for inference.
 
@@ -91,6 +91,9 @@ def assess_quality(image: np.ndarray) -> QualityReport:
     image:
         Image as a numpy array (BGR, RGB-as-BGR, grayscale, or RGBA). Callers in
         this project pass OpenCV BGR arrays.
+    modality:
+        'eye' (conjunctiva) applies the reddish-tissue + glare checks; 'palm'
+        (palm/nail bed) skips those conjunctiva-specific checks.
 
     Returns
     -------
@@ -104,6 +107,12 @@ def assess_quality(image: np.ndarray) -> QualityReport:
 
     blur_var = laplacian_variance(gray)
     brightness = float(gray.mean())
+    # Modality-specific blur threshold: palms are smooth skin with naturally
+    # low edge content, so their threshold is much lower than conjunctiva's.
+    blur_min = (
+        settings.palm_blur_min_variance if modality == "palm"
+        else settings.blur_min_variance
+    )
 
     total = gray.size
     overexposed = float(np.count_nonzero(gray >= 250)) / total
@@ -112,9 +121,9 @@ def assess_quality(image: np.ndarray) -> QualityReport:
     glare = _glare_fraction(bgr)
 
     reasons: list[str] = []
-    if blur_var < settings.blur_min_variance:
+    if blur_var < blur_min:
         reasons.append(
-            f"Image too blurry (focus={blur_var:.1f} < {settings.blur_min_variance:.0f})."
+            f"Image too blurry (focus={blur_var:.1f} < {blur_min:.0f})."
         )
     if brightness < settings.brightness_min:
         reasons.append(
@@ -130,16 +139,18 @@ def assess_quality(image: np.ndarray) -> QualityReport:
                 overexposed, underexposed
             )
         )
-    if tissue < settings.min_tissue_fraction:
-        reasons.append(
-            f"Little conjunctiva tissue detected (red fraction={tissue:.2%} < "
-            f"{settings.min_tissue_fraction:.2%}). Aim the camera at the inner eyelid."
-        )
-    if glare > settings.glare_fraction_max:
-        reasons.append(
-            f"Too much glare/reflection (glare={glare:.1%} > "
-            f"{settings.glare_fraction_max:.0%}). Avoid direct flash; use diffuse light."
-        )
+    # Conjunctiva-specific checks only apply to the 'eye' modality.
+    if modality == "eye":
+        if tissue < settings.min_tissue_fraction:
+            reasons.append(
+                f"Little conjunctiva tissue detected (red fraction={tissue:.2%} < "
+                f"{settings.min_tissue_fraction:.2%}). Aim the camera at the inner eyelid."
+            )
+        if glare > settings.glare_fraction_max:
+            reasons.append(
+                f"Too much glare/reflection (glare={glare:.1%} > "
+                f"{settings.glare_fraction_max:.0%}). Avoid direct flash; use diffuse light."
+            )
 
     return QualityReport(
         passed=len(reasons) == 0,

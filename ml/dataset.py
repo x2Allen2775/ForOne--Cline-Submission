@@ -88,6 +88,46 @@ def load_manifest(data_dir: str | Path) -> list[Sample]:
     return samples
 
 
+def load_manifest_csv(csv_path: str | Path) -> list[Sample]:
+    """
+    Read a unified manifest CSV produced by ``ml.build_manifest`` (columns:
+    image_path [absolute], label, patient_id, ...). Rows with a missing image
+    file are skipped.
+    """
+    csv_path = Path(csv_path)
+    if not csv_path.exists():
+        raise FileNotFoundError(
+            f"Manifest not found: {csv_path}. Run 'python -m ml.build_manifest' first."
+        )
+    df = pd.read_csv(csv_path)
+
+    if "label" in df.columns:
+        labels = df["label"].astype(str)
+    elif "hb" in df.columns:
+        labels = df["hb"].astype(float).map(hb_to_class)
+    else:
+        raise ValueError("Manifest must contain a 'label' or 'hb' column.")
+
+    patient_ids = (
+        df["patient_id"].astype(str) if "patient_id" in df.columns
+        else df["image_path"].map(lambda p: Path(p).stem)
+    )
+
+    samples: list[Sample] = []
+    missing = 0
+    for path, label, pid in zip(df["image_path"], labels, patient_ids):
+        img_path = Path(path)
+        if not img_path.exists():
+            missing += 1
+            continue
+        samples.append(
+            Sample(image_path=img_path, label_idx=_label_to_idx(label), patient_id=str(pid))
+        )
+    if missing:
+        print(f"[dataset] WARN: {missing} manifest rows skipped (image file missing).")
+    return samples
+
+
 def patient_wise_split(
     samples: list[Sample], val_frac: float = 0.2, seed: int = 42
 ) -> tuple[list[Sample], list[Sample]]:
@@ -102,56 +142,70 @@ def patient_wise_split(
     return train, val
 
 
-def build_transforms(train: bool):
-    """albumentations transforms (brightness/contrast/rotation/blur per plan)."""
-    import albumentations as A
-    from albumentations.pytorch import ToTensorV2
+def _augment(bgr: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    """
+    Geometric + illumination augmentation for TRAINING only.
 
-    size = settings.input_size
-    if train:
-        return A.Compose(
-            [
-                A.LongestMaxSize(max_size=int(size * 1.15)),
-                A.PadIfNeeded(size, size, border_mode=0),
-                A.RandomResizedCrop(size=(size, size), scale=(0.7, 1.0), ratio=(0.8, 1.25)),
-                A.HorizontalFlip(p=0.5),
-                A.Rotate(limit=20, p=0.5),
-                A.RandomBrightnessContrast(0.2, 0.2, p=0.5),
-                A.HueSaturationValue(10, 15, 10, p=0.3),
-                A.GaussianBlur(blur_limit=(3, 5), p=0.2),
-                A.Normalize(mean=settings.norm_mean, std=settings.norm_std),
-                ToTensorV2(),
-            ]
-        )
-    return A.Compose(
-        [
-            A.LongestMaxSize(max_size=size),
-            A.PadIfNeeded(size, size, border_mode=0),
-            A.CenterCrop(size, size),
-            A.Normalize(mean=settings.norm_mean, std=settings.norm_std),
-            ToTensorV2(),
-        ]
-    )
+    Deliberately applied BEFORE the serving preprocessing (crop → colour
+    normalize → resize/tensor) so the model sees the exact same distribution at
+    train time and serve time. Train/serve preprocessing mismatch is the
+    classic way a model scores well in training but degenerates in production.
+    """
+    import cv2
+
+    # Horizontal flip (50%).
+    if rng.random() < 0.5:
+        bgr = cv2.flip(bgr, 1)
+    # Small rotation (±15°, 50%).
+    if rng.random() < 0.5:
+        angle = float(rng.uniform(-15, 15))
+        h, w = bgr.shape[:2]
+        M = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0)
+        bgr = cv2.warpAffine(bgr, M, (w, h), flags=cv2.INTER_LINEAR,
+                             borderMode=cv2.BORDER_REFLECT)
+    # Brightness/contrast jitter (±20%, 50%).
+    if rng.random() < 0.5:
+        alpha = 1.0 + float(rng.uniform(-0.2, 0.2))   # contrast
+        beta = float(rng.uniform(-25, 25))             # brightness
+        bgr = np.clip(bgr.astype(np.float32) * alpha + beta, 0, 255).astype(np.uint8)
+    # Slight defocus (20%) — mimics imperfect focus without destroying detail.
+    if rng.random() < 0.2:
+        k = 3
+        bgr = cv2.GaussianBlur(bgr, (k, k), 0)
+    return bgr
 
 
 class AnemiaDataset:
-    """Torch-style dataset yielding (tensor, label_idx)."""
+    """
+    Torch-style dataset yielding (tensor, label_idx).
 
-    def __init__(self, samples: list[Sample], train: bool):
-        import cv2
+    Uses the EXACT serving preprocessing (``app.pipeline.preprocessing.preprocess``:
+    modality-aware crop → gray-world + CLAHE colour normalization → resize →
+    ImageNet-normalize → CHW tensor) so training and inference distributions match.
+    Training additionally applies augmentation BEFORE that pipeline.
+    """
 
-        self._cv2 = cv2
+    def __init__(self, samples: list[Sample], train: bool, modality: str = "eye",
+                 seed: int = 42):
+        # NB: do NOT store unpicklable modules on the instance (DataLoader workers).
         self.samples = samples
-        self.tf = build_transforms(train)
+        self.train = train
+        self.modality = modality
+        self._rng = np.random.default_rng(seed if not train else seed + 1)
 
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, i: int):
+        import torch
+
+        from app.imageio import read_image
+        from app.pipeline import preprocessing as pp
+
         s = self.samples[i]
-        img = self._cv2.imread(str(s.image_path), self._cv2.IMREAD_COLOR)
-        if img is None:
-            raise FileNotFoundError(f"Could not read image: {s.image_path}")
-        img = self._cv2.cvtColor(img, self._cv2.COLOR_BGR2RGB)
-        out = self.tf(image=img)
-        return out["image"], s.label_idx
+        img = read_image(s.image_path)  # HEIC-aware BGR loader
+        if self.train:
+            img = _augment(img, self._rng)
+        pre = pp.preprocess(img, modality=self.modality)
+        x = torch.from_numpy(np.ascontiguousarray(pre["tensor_chw"]))
+        return x, s.label_idx

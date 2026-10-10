@@ -55,10 +55,14 @@ drop.addEventListener("drop", (e) => {
 
 // Model status badge
 fetch("/health").then((r) => r.json()).then((d) => {
-  const m = d.model || {};
-  const trained = m.trained ? "trained model" : "\u26a0 untrained demo weights";
+  const models = d.models || {};
+  const parts = [];
+  for (const [name, m] of Object.entries(models)) {
+    parts.push(`${name}: ${m.trained ? "trained" : "\u26a0 demo weights"}`);
+  }
+  const dev = (models.eye && models.eye.device) || (models.palm && models.palm.device) || "?";
   document.getElementById("status").innerHTML =
-    `device: <b>${m.device || "?"}</b> \u00b7 ${trained}`;
+    `device: <b>${dev}</b> \u00b7 ${parts.join(" \u00b7 ")}`;
 }).catch(() => {
   document.getElementById("status").textContent = "model status unavailable";
 });
@@ -87,6 +91,7 @@ async function analyze() {
   fd.append("image", fileObj);
   fd.append("metadata", JSON.stringify(buildMetadata()));
   fd.append("with_gradcam", document.getElementById("with_gradcam").checked ? "true" : "false");
+  fd.append("modality", document.getElementById("modality").value);
 
   try {
     const r = await fetch("/analyze", { method: "POST", body: fd });

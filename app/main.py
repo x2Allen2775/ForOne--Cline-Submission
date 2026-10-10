@@ -77,31 +77,41 @@ def health() -> dict:
     try:
         from app.pipeline.inference import get_classifier
 
-        clf = get_classifier()
-        model_info = {
-            "arch": settings.model_arch,
-            "device": str(clf.device),
-            "trained": clf.trained,
-            "classes": list(settings.class_names),
-        }
+        info = {}
+        for modality in ("eye", "palm"):
+            clf = get_classifier(modality=modality)
+            info[modality] = {
+                "arch": settings.model_arch,
+                "device": str(clf.device),
+                "trained": clf.trained,
+                "classes": list(settings.class_names),
+            }
+        model_info = info
     except Exception as exc:  # pragma: no cover
         model_info = {"error": f"model not ready: {exc}"}
 
-    return {"status": "ok", "version": __version__, "model": model_info}
+    return {"status": "ok", "version": __version__, "models": model_info}
 
 
 @app.post("/analyze", response_model=TriageReport, tags=["pipeline"])
 async def analyze(
-    image: UploadFile = File(..., description="Conjunctiva image (jpg/png)."),
+    image: UploadFile = File(..., description="Conjunctiva or palm/nail image (jpg/png/heic)."),
     metadata: str = Form(
         "{}",
         description='Patient metadata as a JSON string, e.g. '
         '{"age_months": 300, "is_pregnant": true, "symptoms": ["fatigue"]}',
     ),
     with_gradcam: bool = Form(True, description="Include Grad-CAM heatmap."),
+    modality: str = Form(
+        "eye",
+        description="Screening modality: 'eye' (conjunctiva, default) or 'palm' (palm/nail bed).",
+    ),
 ) -> TriageReport:
     """
-    Analyze a single conjunctiva image and return a structured triage report.
+    Analyze a single image and return a structured triage report.
+
+    ``modality`` selects the model + preprocessing: 'eye' = conjunctiva
+    (inner lower eyelid), 'palm' = palm/nail-bed photo.
     """
     # Parse + validate metadata.
     try:
@@ -113,6 +123,9 @@ async def analyze(
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=json.loads(exc.json()))
 
+    if modality not in ("eye", "palm"):
+        raise HTTPException(status_code=422, detail="modality must be 'eye' or 'palm'.")
+
     # Read + decode the image.
     raw = await image.read()
     if not raw:
@@ -122,7 +135,7 @@ async def analyze(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
-    return analyze_image(bgr, patient, with_gradcam=with_gradcam)
+    return analyze_image(bgr, patient, with_gradcam=with_gradcam, modality=modality)
 
 
 @app.get("/", include_in_schema=False)

@@ -12,6 +12,13 @@ data/raw/**
 !data/raw/.gitkeep
 # keep small synthetic demo images that ship with the repo
 !data/sample/**
+# generated manifests contain machine-specific absolute paths
+data/manifests/
+
+# ── Raw dataset folders placed in the project root (large; not for git) ──
+dataset anemia/
+CP-AnemiC*/
+Palm/
 
 # ── Model artifacts ──
 ml/checkpoints/*.pt

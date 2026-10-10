@@ -55,26 +55,31 @@ def analyze_image(
     image_bgr: np.ndarray,
     patient: PatientMetadata,
     with_gradcam: bool = True,
+    modality: str = "eye",
 ) -> TriageReport:
     """
     Run the full pipeline on a decoded BGR image + patient metadata.
+
+    modality:
+      * 'eye'  -> conjunctiva model + conjunctiva quality checks (default).
+      * 'palm' -> palm/nail-bed model + relaxed quality checks.
     """
     start = time.perf_counter()
     warnings: list[str] = []
 
     # ── Stage 1: Quality Gate ──
-    quality = quality_gate.assess_quality(image_bgr)
+    quality = quality_gate.assess_quality(image_bgr, modality=modality)
     if not quality.passed:
         elapsed = (time.perf_counter() - start) * 1000
         return _rejected_report(patient, quality, elapsed)
 
     # ── Stage 2: Preprocessing ──
-    pre = preprocessing.preprocess(image_bgr)
+    pre = preprocessing.preprocess(image_bgr, modality=modality)
 
     # ── Stage 3: Inference (deferred torch import) ──
     from app.pipeline.inference import get_classifier
 
-    clf = get_classifier()
+    clf = get_classifier(modality=modality)
     vision = clf.predict(pre["tensor_chw"])
     if not vision.model_trained:
         warnings.append(

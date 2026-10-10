@@ -27,6 +27,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from app.config import settings
+
 
 # ── ANSI colours (auto-disabled when output is not a TTY) ────────────────────────
 class C:
@@ -95,12 +97,16 @@ def load_metadata(image_path: Path, args) -> dict:
     return meta
 
 
-def print_summary(image_path: Path, img_shape, report, patient) -> None:
+def print_summary(image_path: Path, img_shape, report, patient, modality: str = "eye") -> None:
     """Print the full color-coded triage summary to the terminal."""
     rd = report.model_dump(mode="json")
     q = rd["quality"]
     v = rd.get("vision")
     t = rd.get("triage")
+    blur_min = (
+        settings.palm_blur_min_variance if modality == "palm"
+        else settings.blur_min_variance
+    )
 
     line = "═" * 63
     print("\n" + C.cyan(line))
@@ -124,11 +130,11 @@ def print_summary(image_path: Path, img_shape, report, patient) -> None:
     passed = q["passed"]
     status = C.green("PASS ✓") if passed else C.red("REJECT ✗")
     print("\n " + C.bold("── QUALITY GATE ") + "─" * 26 + f"  {status}")
-    print(f"   blur (Laplacian var) : {q['blur_variance']:>8.1f}   (min 100)")
-    print(f"   brightness mean      : {q['brightness_mean']:>8.1f}   (window 40–215)")
+    print(f"   blur (Laplacian var) : {q['blur_variance']:>8.1f}   (min {blur_min:.0f})")
+    print(f"   brightness mean      : {q['brightness_mean']:>8.1f}   (window {settings.brightness_min:.0f}–{settings.brightness_max:.0f})")
     print(f"   over / under exposed : {q['overexposed_fraction']*100:>5.1f}% / {q['underexposed_fraction']*100:.1f}%")
-    print(f"   glare fraction       : {q['glare_fraction']*100:>7.1f}%   (max 8%)")
-    print(f"   conjunctiva tissue   : {q['tissue_fraction']*100:>7.1f}%   (min 2%)")
+    print(f"   glare fraction       : {q['glare_fraction']*100:>7.1f}%   (max {settings.glare_fraction_max*100:.0f}%)")
+    print(f"   conjunctiva tissue   : {q['tissue_fraction']*100:>7.1f}%   (min {settings.min_tissue_fraction*100:.0f}%)")
     if q["reasons"]:
         for r in q["reasons"]:
             print("   " + C.red("• " + r))
@@ -237,18 +243,52 @@ def show_window(
     fig.savefig(str(save_path), dpi=120, bbox_inches="tight")
     print(C.dim(f"[cli] figure saved → {save_path}"))
 
-    if show:
-        print(C.dim("[cli] opening window… (close it to exit)"))
-        plt.show()
-    else:
+    if not show:
         plt.close(fig)
+        return
+
+    print(C.dim("[cli] opening window… (close it to exit)"))
+    # Draw first so the window has content, then try to raise it to the front —
+    # on macOS the matplotlib window often opens *behind* the terminal.
+    try:
+        fig.canvas.draw()
+        mgr = fig.canvas.manager
+        if hasattr(mgr, "window"):
+            win = mgr.window
+            # Tk backend
+            if hasattr(win, "lift"):
+                try:
+                    win.lift()
+                    win.attributes("-topmost", True)
+                    win.after(500, lambda: win.attributes("-topmost", False))
+                except Exception:
+                    pass
+        # Bring the Python process to the foreground on macOS.
+        import platform
+        if platform.system() == "Darwin":
+            import subprocess
+            try:
+                subprocess.run(
+                    ["osascript", "-e",
+                     'tell application "System Events" to set frontmost of '
+                     'the first process whose unix id is %d to true' % __import__("os").getpid()],
+                    capture_output=True, timeout=3,
+                )
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    plt.show(block=True)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Analyze a single conjunctiva image: terminal summary + Grad-CAM window."
     )
-    ap.add_argument("--image", required=True, help="Path to the conjunctiva image.")
+    ap.add_argument("--image", required=True, help="Path to the image.")
+    ap.add_argument("--modality", choices=["eye", "palm"], default="eye",
+                    help="eye=conjunctiva (default), palm=palm/nail-bed photo.")
     ap.add_argument("--age-months", type=int, default=None)
     ap.add_argument("--sex", choices=["male", "female", "other", "unknown"], default=None)
     ap.add_argument("--pregnant", action="store_true", help="Mark patient as pregnant.")
@@ -258,6 +298,8 @@ def main() -> int:
     ap.add_argument("--ignore-sidecar", action="store_true", help="Do not read <image>.json.")
     ap.add_argument("--no-window", action="store_true", help="Headless: print + save only.")
     ap.add_argument("--no-gradcam", action="store_true", help="Skip Grad-CAM entirely.")
+    ap.add_argument("--open", action="store_true",
+                    help="Also open the saved report PNG in the default viewer (macOS Preview).")
     ap.add_argument("--json", action="store_true", help="Also print the raw JSON report.")
     ap.add_argument("--out-dir", default="outputs", help="Where to save the figure.")
     args = ap.parse_args()
@@ -285,11 +327,11 @@ def main() -> int:
     patient = PatientMetadata(**meta)
 
     with_gradcam = not args.no_gradcam
-    print(C.dim("[cli] running pipeline…"))
-    report = analyze_image(bgr, patient, with_gradcam=with_gradcam)
+    print(C.dim(f"[cli] running pipeline… (modality={args.modality})"))
+    report = analyze_image(bgr, patient, with_gradcam=with_gradcam, modality=args.modality)
 
     # Terminal summary.
-    print_summary(image_path, bgr.shape, report, patient)
+    print_summary(image_path, bgr.shape, report, patient, modality=args.modality)
 
     if args.json:
         print(json.dumps(report.model_dump(mode="json"), indent=2))
@@ -299,7 +341,7 @@ def main() -> int:
     gradcam_bgr = None
     if report.status == "ok":
         try:
-            cropped_bgr = preprocessing.preprocess(bgr)["normalized_bgr"]
+            cropped_bgr = preprocessing.preprocess(bgr, modality=args.modality)["normalized_bgr"]
         except Exception as exc:  # pragma: no cover
             print(C.yellow(f"[cli] could not render preprocessed panel ({exc})"))
     if report.gradcam_png_base64:
@@ -314,6 +356,18 @@ def main() -> int:
         save_path=save_path,
         show=not args.no_window,
     )
+
+    # Guaranteed fallback: open the saved PNG in the OS image viewer.
+    if args.open:
+        import platform
+        import subprocess
+        try:
+            opener = {"Darwin": "open", "Windows": "start", "Linux": "xdg-open"}.get(
+                platform.system(), "open"
+            )
+            subprocess.run([opener, str(save_path)], check=False)
+        except Exception as exc:
+            print(C.yellow(f"[cli] could not auto-open figure ({exc})"))
     return 0
 
 

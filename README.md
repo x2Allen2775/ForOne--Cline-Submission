@@ -144,21 +144,39 @@ anemia-screen/
 
 ---
 
-## 🏋️ Training on real data (when you're ready)
+## 🏋️ Training on your real data (done once, reproducible)
 
-1. Download datasets (free registration) and place them under `data/raw/`:
-   - **Eyes-defy-anemia** (conjunctiva + Hb)
-   - **CP-AnemiC** (conjunctival pallor)
-   See `docs/DATASETS.md` for the exact layout and the `labels.csv` schema.
-2. Train:
-   ```bash
-   python -m ml.train --data-dir data/raw --epochs 15 --batch-size 32
-   ```
-   Best checkpoint → `ml/checkpoints/anemia_mobilenetv3.pt` (auto-loaded by the API).
-3. (Optional) Export ONNX: `python -m ml.export_onnx`
+Datasets supported (auto-detected in the project root):
+- **Eyes-defy-anemia** (`dataset anemia/` — India + Italy): per-subject folders, Hb in `India.xlsx`/`Italy.xlsx`.
+- **CP-AnemiC** (conjunctiva, Ghana): extracted from its `.rar`; Hb in `Anemia_Data_Collection_Sheet.xlsx`.
+- **Palm** (`Palm/`): palm/nail-bed PNGs labelled anemic / non-anemic in the filename.
 
-The loader enforces **patient-wise splits** to avoid the data leakage that
-inflates medical-ML scores.
+```bash
+# 1) Build unified manifests (data/manifests/eye.csv + palm.csv)
+python -m ml.build_manifest
+
+# 2) Train each modality (separate MobileNetV3 models, patient-wise splits)
+python -m ml.train --modality eye  --epochs 12 --batch-size 32
+python -m ml.train --modality palm --epochs  8 --batch-size 64
+
+# 3) Evaluate honestly through the SERVING preprocessing path
+python -m ml.evaluate --modality palm --max-images 200
+python -m ml.evaluate --modality eye  --max-images 200
+```
+
+Checkpoints land in `ml/checkpoints/anemia_{eye,palm}_mobilenetv3.pt` and are
+**auto-loaded** by the API/CLI/web UI on next start.
+
+Key training design points:
+- **Train/serve consistency** — training uses the *exact* serving preprocessing
+  (modality-aware crop → gray-world + CLAHE → resize → ImageNet normalize); a
+  train/serve mismatch silently degrades real-world accuracy.
+- **Patient-wise splits** — no patient appears in both train and validation.
+- **Class-weighted loss** for the imbalanced label distribution.
+- **Data-calibrated quality gate** — thresholds were measured against the actual
+  dataset distributions (conjunctiva crops are dark with black backgrounds;
+  palms are smooth skin with naturally low edge content, so blur limits are
+  modality-specific).
 
 ---
 

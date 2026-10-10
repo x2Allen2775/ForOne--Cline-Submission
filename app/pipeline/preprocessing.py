@@ -116,12 +116,27 @@ def to_model_tensor(bgr: np.ndarray) -> np.ndarray:
     return np.transpose(rgb, (2, 0, 1)).astype(np.float32)  # CHW
 
 
-def preprocess(bgr: np.ndarray) -> dict[str, np.ndarray]:
+def _center_crop(bgr: np.ndarray, frac: float = 0.85) -> np.ndarray:
+    """Simple centred crop — used for non-conjunctiva modalities (palm/nail)."""
+    h, w = bgr.shape[:2]
+    ch, cw = int(h * frac), int(w * frac)
+    y0, x0 = (h - ch) // 2, (w - cw) // 2
+    return bgr[y0:y0 + ch, x0:x0 + cw]
+
+
+def preprocess(bgr: np.ndarray, modality: str = "eye") -> dict[str, np.ndarray]:
     """
     Full preprocessing pass. Returns a dict with intermediate artefacts so the
     demo notebook can visualise each stage.
+
+    modality:
+      * 'eye'  -> auto-crop the reddish conjunctiva ROI (default).
+      * 'palm' -> centre-crop only (palm/nail bed is not reddish-masked).
     """
-    cropped = auto_crop_conjunctiva(bgr)
+    if modality == "palm":
+        cropped = _center_crop(bgr)
+    else:
+        cropped = auto_crop_conjunctiva(bgr)
     normalized = normalize_color(cropped)
     tensor = to_model_tensor(normalized)
     return {

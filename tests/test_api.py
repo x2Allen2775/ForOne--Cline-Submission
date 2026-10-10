@@ -41,7 +41,12 @@ def test_health_endpoint():
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
-    assert "model" in body
+    # Per-modality model status (eye + palm).
+    assert "models" in body
+    assert "eye" in body["models"]
+    assert "palm" in body["models"]
+    for m in body["models"].values():
+        assert "trained" in m and "classes" in m
 
 
 def test_root_serves_web_ui():
@@ -120,3 +125,22 @@ def test_analyze_gradcam_included_when_requested():
     if body["status"] == "ok":
         # heatmap may be None only if grad-cam unavailable; assert key present
         assert "gradcam_png_base64" in body
+
+
+def test_analyze_palm_modality():
+    files = {"image": ("palm.png", io.BytesIO(_png_bytes()), "image/png")}
+    data = {"metadata": "{}", "with_gradcam": "false", "modality": "palm"}
+    r = client.post("/analyze", files=files, data=data)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # Palm modality skips the conjunctiva-tissue check, so a reddish synthetic
+    # image should pass and produce a full vision result.
+    assert body["status"] == "ok"
+    assert body["vision"]["risk_class"] in {"Normal", "Mild/Moderate", "Severe"}
+
+
+def test_analyze_bad_modality_returns_422():
+    files = {"image": ("good.png", io.BytesIO(_png_bytes()), "image/png")}
+    data = {"metadata": "{}", "with_gradcam": "false", "modality": "ear"}
+    r = client.post("/analyze", files=files, data=data)
+    assert r.status_code == 422

@@ -36,8 +36,12 @@ class Settings(BaseSettings):
     # ── Model / inference ──
     model_arch: str = "mobilenetv3_large_100"
     input_size: int = 224
-    checkpoint_path: str = str(CHECKPOINT_DIR / "anemia_mobilenetv3.pt")
-    onnx_path: str = str(CHECKPOINT_DIR / "anemia_mobilenetv3.onnx")
+    # Default (eye) checkpoint — kept for backwards compatibility.
+    checkpoint_path: str = str(CHECKPOINT_DIR / "anemia_eye_mobilenetv3.pt")
+    onnx_path: str = str(CHECKPOINT_DIR / "anemia_eye_mobilenetv3.onnx")
+    # Per-modality checkpoints (eye = conjunctiva, palm = palm/nail bed).
+    eye_checkpoint_path: str = str(CHECKPOINT_DIR / "anemia_eye_mobilenetv3.pt")
+    palm_checkpoint_path: str = str(CHECKPOINT_DIR / "anemia_palm_mobilenetv3.pt")
     # Prefer MPS on Apple Silicon, else CUDA, else CPU. "auto" resolves at runtime.
     device: str = "auto"
 
@@ -46,12 +50,20 @@ class Settings(BaseSettings):
     # metrics are resolution-independent (12-MP phone photos vs. small images).
     qc_work_max_edge: int = 1024
     # Variance of the Laplacian below this => image considered blurry.
-    blur_min_variance: float = 100.0
+    # Calibrated to the training data distribution (p1≈17, p5≈22, median≈1500).
+    blur_min_variance: float = 50.0
+    # PALM modality: palms are smooth skin with naturally low edge content
+    # (measured median blur variance ≈ 22.6, p5 ≈ 3.6), so a much lower,
+    # modality-specific threshold is required.
+    palm_blur_min_variance: float = 3.0
     # Mean luminance (0-255) must sit inside this window.
-    brightness_min: float = 40.0
+    # Clinical conjunctiva crops (CP-AnemiC) are dark; p5 brightness ≈ 17.
+    brightness_min: float = 15.0
     brightness_max: float = 215.0
     # Fraction of over/under-exposed pixels tolerated before rejection.
-    exposure_clip_fraction_max: float = 0.35
+    # Conjunctiva crops often sit on a BLACK background (up to ~80% dark pixels
+    # by design), so this is calibrated high; a fully-black frame still fails.
+    exposure_clip_fraction_max: float = 0.85
     # Fraction of specular-glare pixels tolerated before rejection.
     glare_fraction_max: float = 0.08
     # Minimum fraction of the frame that must look like conjunctiva (reddish) tissue.
