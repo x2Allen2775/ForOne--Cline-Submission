@@ -205,3 +205,103 @@ def generate_triage_report(
         flags=extra_flags,
     )
 
+
+def generate_multimodal_triage_decision(
+    eye_report,
+    palm_report,
+    patient: PatientMetadata,
+) -> tuple[TriageDecision, dict[str, Any]]:
+    """
+    Synthesize dual-modality findings (Eyelid + Palm) into a final triage decision.
+    Eyelids (conjunctiva) serve as the PRIMARY factor (70% weight); Palm (palmar pallor)
+    serves as a SECONDARY confirmatory factor (30% weight).
+
+    Returns:
+      (final_triage_decision, synthesis_metadata)
+    """
+    eye_passed = eye_report.quality.passed and eye_report.vision is not None
+    palm_passed = palm_report.quality.passed and palm_report.vision is not None
+
+    if eye_passed and palm_passed:
+        eye_p = eye_report.vision.p_anemic
+        palm_p = palm_report.vision.p_anemic
+        # Primary factor: Eyelid 70%, Palm 30%
+        fused_p = round(0.70 * eye_p + 0.30 * palm_p, 3)
+
+        eye_risk = eye_report.vision.risk_class
+        palm_risk = palm_report.vision.risk_class
+
+        if eye_risk == RiskClass.severe:
+            fused_risk = RiskClass.severe
+        elif eye_risk == RiskClass.mild_moderate:
+            if palm_risk == RiskClass.severe and fused_p >= 0.75:
+                fused_risk = RiskClass.severe
+            else:
+                fused_risk = RiskClass.mild_moderate
+        else:  # Eyelid normal
+            if palm_risk == RiskClass.severe or fused_p >= 0.60:
+                # Discordant sites: escalate mildly for safety
+                fused_risk = RiskClass.mild_moderate
+            else:
+                fused_risk = RiskClass.normal
+
+        concordance = "concordant" if eye_risk == palm_risk else "discordant"
+        synthesis = {
+            "mode": "dual_modality",
+            "primary_site": "eyelid",
+            "eyelid_p_anemic": eye_p,
+            "palm_p_anemic": palm_p,
+            "fused_p_anemic": fused_p,
+            "fused_risk": fused_risk.value,
+            "concordance": concordance,
+            "weights": {"eyelid": 0.70, "palm": 0.30},
+            "note": "Eyelid conjunctival pallor prioritized as primary screening biomarker.",
+        }
+        decision = generate_triage_report(fused_risk, patient, p_anemic=fused_p)
+        if concordance == "discordant":
+            decision.flags.append("discordant_screening_sites")
+            decision.rationale += (
+                f" [Dual-site note: Eyelid ({eye_risk.value}) was prioritized over "
+                f"Palm ({palm_risk.value})]."
+            )
+        return decision, synthesis
+
+    elif eye_passed:
+        # Only eye available / passed
+        synthesis = {
+            "mode": "eyelid_only",
+            "primary_site": "eyelid",
+            "fused_p_anemic": eye_report.vision.p_anemic,
+            "fused_risk": eye_report.vision.risk_class.value,
+            "note": "Eyelid evaluated as primary site; palm rejected or unavailable.",
+        }
+        decision = generate_triage_report(
+            eye_report.vision.risk_class, patient, p_anemic=eye_report.vision.p_anemic
+        )
+        return decision, synthesis
+
+    elif palm_passed:
+        # Only palm passed (eyelid rejected)
+        synthesis = {
+            "mode": "palm_fallback",
+            "primary_site": "palm",
+            "fused_p_anemic": palm_report.vision.p_anemic,
+            "fused_risk": palm_report.vision.risk_class.value,
+            "note": "Eyelid image rejected; palm used as secondary fallback.",
+        }
+        decision = generate_triage_report(
+            palm_report.vision.risk_class, patient, p_anemic=palm_report.vision.p_anemic
+        )
+        decision.flags.append("eyelid_quality_failed_fallback_palm")
+        return decision, synthesis
+
+    else:
+        # Both rejected
+        synthesis = {
+            "mode": "both_rejected",
+            "note": "Both eyelid and palm images failed quality assessment.",
+        }
+        decision = eye_report.triage or palm_report.triage
+        return decision, synthesis
+
+

@@ -32,7 +32,11 @@ evaluate:
 	python -m ml.evaluate --modality eye --max-images 200
 	python -m ml.evaluate --modality palm --max-images 200
 
-# Terminal analyzer with a pop-up 3-panel Grad-CAM window.
+# Interactive dual-modality pipeline with folder/image UI selector & symptom intake
+pipeline:
+	python -m scripts.analyze_cli
+
+# Terminal analyzer (supports multimodal or single image)
 # Usage: make cli IMG=data/sample/pale_pregnant.png MODALITY=eye
 IMG ?= data/sample/pale_pregnant.png
 MODALITY ?= eye

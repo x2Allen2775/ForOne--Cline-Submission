@@ -89,17 +89,20 @@ def analyze_image(
 
     # ── Stage 4: Grad-CAM (explainability) ──
     gradcam_b64 = None
+    heatmap_b64 = None
     if with_gradcam:
-        from app.pipeline.gradcam import generate_gradcam
+        from app.pipeline.gradcam import generate_gradcam_artifacts
 
         target_idx = settings.class_names.index(vision.risk_class.value)
-        gradcam_b64 = generate_gradcam(
+        cam_arts = generate_gradcam_artifacts(
             model=clf.model,
             tensor_chw=pre["tensor_chw"],
             base_bgr=pre["normalized_bgr"],
             device=clf.device,
             target_class=target_idx,
         )
+        gradcam_b64 = cam_arts.get("overlay_png_b64")
+        heatmap_b64 = cam_arts.get("heatmap_png_b64")
         if gradcam_b64 is None:
             warnings.append("Grad-CAM heatmap could not be generated.")
 
@@ -116,6 +119,7 @@ def analyze_image(
         vision=vision,
         triage=triage,
         gradcam_png_base64=gradcam_b64,
+        heatmap_png_base64=heatmap_b64,
         processing_ms=round(elapsed, 2),
         warnings=warnings,
     )

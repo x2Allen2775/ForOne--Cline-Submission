@@ -31,8 +31,9 @@ outputs/
 *.csv
 !tests/**/*.csv
 
-# ── OS / editor ──
+# ── OS / editor / large media ──
 .DS_Store
 .idea/
 .vscode/
 *.log
+*.mov

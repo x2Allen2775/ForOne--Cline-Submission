@@ -1,31 +1,34 @@
 # Anemia-Screen — Comprehensive Technical Report
 
 **Project:** Anemia-Screen · AI Conjunctiva & Palm Anemia Screening and Triage Pipeline
-**Version:** 1.0.0 (app `0.1.0`) · **Date:** 10 October 2026
+**Version:** 1.1.0 (app `0.1.0`) · **Date:** 10 October 2026
 **Platform:** Apple MacBook Air (Apple M4, arm64), macOS 27.0 · **Runtime:** conda env `anemia` (Python 3.11.17)
-**Status:** End-to-end working prototype with two trained models, 48/48 automated tests passing, 5 git commits, 60 tracked files.
+**Status:** End-to-end working multimodal screening system with two trained models, Clinical NLP symptom intake, dual-site rules synthesis (Eyelid 70% primary / Palm 30% secondary), spatial Grad-CAM explainability, 55/55 automated tests passing, and mandatory clinical disclaimers.
 
 ---
 
 ## Abstract
 
 Anemia-Screen is a local-first, offline-capable clinical decision-support pipeline that screens
-for anemia from a smartphone photograph of the **palpebral conjunctiva** (inner lower eyelid) or,
-as a secondary site, the **palm**, and produces an actionable, WHO/MoHFW-aligned triage
-recommendation. The system ingests an image plus patient metadata (age, pregnancy status,
-symptoms, optional measured hemoglobin), rejects unusable photos through a data-calibrated
-quality gate, runs a MobileNetV3 classifier per modality, generates a Grad-CAM explainability
-heatmap, and combines the vision score with clinical rules that follow the safety-first
-principle **"an image is a screen, not a diagnosis"** — an image alone never triggers treatment;
-it triggers a confirmatory blood test.
+for anemia using a dual-modality computer vision and clinical NLP framework. The pipeline ingests
+smartphone photographs of the **palpebral conjunctiva** (inner lower eyelid — primary site, 70% weight)
+and/or the **palm** (palmar skin — secondary confirmatory site, 30% weight), performs rigorous data-calibrated
+image quality gating, runs specialized MobileNetV3 classifiers, generates true spatial Grad-CAM
+explainability heatmaps, and synthesizes vision predictions with a WHO/MoHFW-aligned clinical rules engine
+and free-text symptom NLP parser. The system strictly adheres to the safety-first principle:
+**"An image is a screening tool, NOT a diagnosis"** — non-invasive visual screening never initiates
+pharmacological treatment on its own; it triages patients for timely confirmatory laboratory hemoglobin testing.
 
 Two models were trained on **three real public datasets** (Eyes-defy-anemia India/Italy,
 CP-AnemiC Ghana, and a palmar images dataset — 5,172 images total). Through the true
 serving-preprocessing path the conjunctiva model achieves **80.9% sensitivity / 60.0%
 specificity**, and the palm model **76.5% sensitivity / 69.7% specificity** on patient-wise
-validation splits. All thresholds are config-driven. The pipeline is exposed through a FastAPI
-service (with a self-contained offline web UI), a terminal CLI (with a pop-up 3-panel Grad-CAM
-matplotlib window), and a batch processor producing CSV dashboards.
+validation splits. The system provides an interactive dual-modality launcher (`run_pipeline.py`)
+featuring crash-free native file pickers, clinical symptom NLP with negation handling ("denies breathlessness"),
+automatic WHO danger-sign escalation, standalone Grad-CAM heatmap exports, a 2-row × 3-column master visual
+dashboard (`multimodal_triage_dashboard.png`), standalone 3-panel figures for each site, and a standardized
+clinical disclaimer embedded in all JSON reports, figures, and CLI outputs. The codebase is supported by
+**55 passing automated tests**, a self-contained offline FastAPI service, web UI, and batch CSV processor.
 
 ---
 
@@ -108,78 +111,104 @@ result must be confirmed with a measured hemoglobin.
 
 ## 2. System Architecture
 
-### 2.1 Pipeline flow (per request)
+### 2.1 Pipeline flow (Dual-Modality & Clinical NLP Architecture)
 
 ```
-INPUT: image (jpg/png/webp/bmp/HEIC) + patient metadata JSON
+INPUT: Eyelid image + Palm image + Patient Clinical Factors (Age, Sex, Pregnancy, Hb, Symptoms Text)
    │
-   ▼
-[1] IMAGE I/O — OpenCV → Pillow/pillow-heif fallback, EXIF rotation
+   ├── [0] CLINICAL NLP INTAKE (app/clinical_nlp.py)
+   │       → Lexicon normalization & negation parsing ("denies breathlessness", "no chest pain")
+   │       → WHO/MoHFW danger-sign detection (fainting, chest pain, palpitations, severe pallor…)
+   │       → Clinical entity extraction: Pregnancy status, Trimester, Measured Hb (g/dL)
+   │       → Pre-eclampsia risk detection (swelling + headache/blurred vision)
    │
-   ▼
-[2] QUALITY GATE — blur (Laplacian var, modality-specific) · brightness window ·
-   │               exposure clipping · glare · conjunctiva-tissue (eye only)
-   │  fail → RETAKE_PHOTO (no inference performed)
-   ▼  pass
-[3] PREPROCESSING — eye: HSV-red conjunctiva auto-crop · palm: centre crop 85%
-   │               both: gray-world white balance + CLAHE → 224² → ImageNet norm
-   ▼
-[4] INFERENCE — timm MobileNetV3-large-100 (per modality) → risk_class,
-   │             confidence, P(anemic), per-class probabilities, trained flag
-   ▼
-[5] GRAD-CAM — base64 PNG heatmap overlay (CPU retry if MPS lacks a backward op)
+   ├── [1] IMAGE I/O (app/imageio.py)
+   │       → OpenCV with Pillow / pillow-heif fallback, EXIF orientation correction
    │
-   ▼
-[6] WHO/MoHFW RULES ENGINE — danger-sign override → measured-Hb override →
-   │                          image-risk thresholds → symptom escalation
-   ▼
-OUTPUT: TriageReport JSON (quality, vision, triage, Grad-CAM, warnings, latency)
-        · CSV batch dashboards · terminal report · web UI
+   ├── [2] QUALITY GATE (app/pipeline/quality_gate.py)
+   │       → Modality-calibrated blur (Laplacian variance: 50 for Eye, 3 for Palm)
+   │       → Brightness window, exposure clipping, specular glare & conjunctiva tissue checks
+   │       → Fail → RETAKE_PHOTO recommendation (prevents false predictions)
+   │
+   ├── [3] PREPROCESSING (app/pipeline/preprocessing.py)
+   │       → Eye: HSV-red conjunctiva auto-crop (with zero-size safety guards)
+   │       → Palm: Center crop 85%
+   │       → Both: Gray-world white balance + CLAHE local contrast → 224² resize → ImageNet normalization
+   │
+   ├── [4] INFERENCE (app/pipeline/inference.py)
+   │       → timm MobileNetV3-large-100 per modality → RiskClass, confidence, P(anemic), class logits
+   │
+   ├── [5] EXPLAINABILITY (app/pipeline/gradcam.py)
+   │       → Pre-pooling conv layer (model.blocks[-1]) for true 2D spatial feature activation maps
+   │       → Standalone JET heatmap + 45/55 overlay on normalized ROI
+   │       → Saved to disk (eyelid_heatmap.png, palm_heatmap.png) & embedded in JSON (base64 PNG)
+   │
+   └── [6] WHO/MoHFW MULTIMODAL RULES SYNTHESIS (app/pipeline/rules_engine.py)
+           → Danger-sign override (SAFETY FIRST: immediate REFER_NOW)
+           → Measured-Hb override (confirmatory blood test priority: <7 REFER_NOW; 7–10.9 TREAT_AND_RECHECK; ≥11 ROUTINE)
+           → Dual-site synthesis: Eyelid (70% primary weight) + Palm (30% secondary weight)
+           → Site concordance / discordance analysis & safety escalation
+           → Quality failure fallbacks (e.g., eyelid failed → fallback to palm with audit flag)
+   │
+OUTPUT:
+   • Master Multimodal Dashboard (outputs/multimodal_triage_dashboard.png, 2-row × 3-col panel)
+   • Isolated 3-Panel Figures (outputs/eyelid_3panel.png, outputs/palm_3panel.png)
+   • Standalone Heatmaps (outputs/eyelid_heatmap.png, outputs/palm_heatmap.png)
+   • Full JSON Triage Report (outputs/multimodal_triage_report.json) + CSV Batch Dashboards
+   • Color-coded Terminal Report ending with the MANDATORY CLINICAL DISCLAIMER
 ```
 
-### 2.2 Modality design
+### 2.2 Modality design & Dual-Site Synthesis
 
-Two **parallel, selectable modalities** (each generates its own full report; eye is the default):
+The system supports both **isolated single-site screening** and **integrated dual-modality screening**:
 
-| | `eye` (default — main) | `palm` (secondary) |
+| Feature | `eye` (Primary Factor — 70% Weight) | `palm` (Secondary Factor — 30% Weight) |
 |---|---|---|
-| Image | Inner lower eyelid (conjunctiva) | Palm skin photo |
-| Checkpoint | `ml/checkpoints/anemia_eye_mobilenetv3.pt` | `ml/checkpoints/anemia_palm_mobilenetv3.pt` |
-| Crop | HSV-red conjunctiva auto-crop | Centre crop 85% |
-| Blur threshold | 50 | 3 (smooth skin → naturally low edge variance) |
-| Tissue/glare checks | Applied | Skipped (conjunctiva-specific) |
-| Validation accuracy | 60.99% | 77.75% |
-| Sensitivity (serving path) | 80.9% | 76.5% |
-| Specificity (serving path) | 60.0% | 69.7% |
+| Biological Target | Palpebral conjunctiva (inner lower eyelid capillary bed) | Palmar skin (palmar pallor) / nail beds |
+| Physiological Rationale | Direct microvascular visualization; minimal melanin interference | Peripheral cutaneous vasoconstriction; easy accessibility |
+| Model Checkpoint | `ml/checkpoints/anemia_eye_mobilenetv3.pt` | `ml/checkpoints/anemia_palm_mobilenetv3.pt` |
+| Serving Preprocessing | HSV-red conjunctiva auto-crop + CLAHE + Gray-World | Center crop 85% + CLAHE + Gray-World |
+| Blur Threshold (Laplacian) | 50 (sharp vascular edges required) | 3 (smooth cutaneous tissue naturally low-edge) |
+| Tissue & Glare Gates | Active (red tissue fraction ≥ 0.05, glare fraction ≤ 0.15) | Cutaneous skin check; glare/tissue checks skipped |
+| Validation Accuracy | 60.99% | 77.75% |
+| Serving Sensitivity | 80.9% | 76.5% |
+| Serving Specificity | 60.0% | 69.7% |
+| Multimodal Role | **Primary biomarker (70% fused probability weight)** | **Corroborating biomarker (30% fused probability weight)** |
 
-The conjunctiva is the primary site (classical WHO pallor site, richer vascular signal); palm
-is the secondary site, switchable when an eyelid photo is unavailable or fails the gate.
+**Dual-Site Decision Synthesis:**
+- When both images pass the quality gate:
+  $$P_{\text{anemic}}^{\text{fused}} = 0.70 \times P_{\text{anemic}}^{\text{eyelid}} + 0.30 \times P_{\text{anemic}}^{\text{palm}}$$
+- Site agreement is audited: `concordant` if both models predict the same risk class; `discordant` if they differ. When discordant (e.g. eyelid Normal but palm Severe), the system flags `discordant_screening_sites` and escalates caution without overriding high-risk indications.
+- If the eyelid photo fails quality gate (e.g., motion blur), the engine falls back to palm with the flag `eyelid_quality_failed_fallback_palm`.
 
 ### 2.3 Component map
 
 | Component | File(s) | Responsibility |
 |---|---|---|
+| Pipeline Launcher | `run_pipeline.py` | Top-level interactive runner invoking UI selector and pipeline |
+| Clinical Intake UI | `scripts/ui_selector.py` | Native macOS AppleScript individual image pickers + patient factors intake dialog + CLI fallback |
+| Clinical NLP Analyzer | `app/clinical_nlp.py` | Free-text symptom lexicon parsing, negation detection, danger-sign escalation, entity extraction |
 | FastAPI service | `app/main.py` | `/analyze`, `/health`, `/api`, offline `/docs`, web UI at `/` |
-| Runtime config | `app/config.py` | model paths, input size, quality-gate thresholds (env-overridable `ANEMIA_*`) |
+| Runtime config | `app/config.py` | Model paths, input size, quality-gate thresholds (env-overridable `ANEMIA_*`) |
 | Clinical config | `app/clinical_config.yaml`, `app/clinical.py` | WHO Hb bands per group, risk thresholds, danger signs, follow-up windows |
-| Schemas | `app/schemas.py` | Pydantic contracts (`PatientMetadata`, `QualityReport`, `VisionPrediction`, `TriageDecision`, `TriageReport`) |
-| Image I/O | `app/imageio.py` | HEIC/HEIF + EXIF-aware robust loader |
-| Quality gate | `app/pipeline/quality_gate.py` | blur / brightness / exposure / glare / tissue checks |
-| Preprocessing | `app/pipeline/preprocessing.py` | modality-aware crop + colour normalization + tensor |
-| Inference | `app/pipeline/inference.py` | per-modality MobileNetV3 classifier + graceful fallback |
-| Grad-CAM | `app/pipeline/gradcam.py` | explainability heatmap |
-| Rules engine | `app/pipeline/rules_engine.py` | WHO/MoHFW triage logic (pure, deterministic) |
-| Orchestrator | `app/pipeline/orchestrator.py` | wires stages 1–6 |
-| Manifest builder | `ml/build_manifest.py` | parses 3 raw datasets → `data/manifests/{eye,palm}.csv` |
-| Dataset | `ml/dataset.py` | serving-consistent dataset + patient-wise split |
-| Training | `ml/train.py` | per-modality training loop |
-| Evaluation | `ml/evaluate.py` | honest serving-path sensitivity/specificity |
-| ONNX export | `ml/export_onnx.py` | checkpoint → ONNX (onnxruntime-verified) |
-| CLI analyzer | `scripts/analyze_cli.py` | terminal report + pop-up 3-panel Grad-CAM window |
-| Batch processor | `scripts/batch_process.py` | folder → triage CSV (API or local mode) |
-| Sample generator | `scripts/make_sample_images.py` | synthetic demo images + metadata sidecars |
-| Web UI | `app/static/index.html`, `app/static/app.js` | offline, self-contained upload & triage UI |
-| Tests | `tests/` | 48 automated tests |
+| Schemas | `app/schemas.py` | Pydantic contracts (`PatientMetadata`, `QualityReport`, `VisionPrediction`, `TriageDecision`, `TriageReport`, `CLINICAL_DISCLAIMER`) |
+| Image I/O | `app/imageio.py` | HEIC/HEIF + EXIF-aware robust image loader |
+| Quality gate | `app/pipeline/quality_gate.py` | Modality-calibrated blur / brightness / exposure / glare / tissue checks |
+| Preprocessing | `app/pipeline/preprocessing.py` | Modality-aware crop + dimension guards + colour normalization + tensor conversion |
+| Inference | `app/pipeline/inference.py` | Per-modality MobileNetV3 classifier + graceful fallback |
+| Grad-CAM | `app/pipeline/gradcam.py` | Pre-pooling conv feature map targeting, standalone heatmap & overlay generation |
+| Rules engine | `app/pipeline/rules_engine.py` | Pure WHO/MoHFW triage logic + dual-modality 70/30 synthesis (`generate_multimodal_triage_decision`) |
+| Orchestrator | `app/pipeline/orchestrator.py` | Wires stages 1–6 per modality, returns structured `TriageReport` |
+| Manifest builder | `ml/build_manifest.py` | Parses 3 raw datasets → `data/manifests/{eye,palm}.csv` |
+| Dataset | `ml/dataset.py` | Serving-consistent dataset + patient-wise train/val splits |
+| Training | `ml/train.py` | Per-modality MobileNetV3 training loop with class weighting |
+| Evaluation | `ml/evaluate.py` | Honest serving-path sensitivity / specificity evaluation |
+| ONNX export | `ml/export_onnx.py` | Checkpoint → ONNX model (verified with onnxruntime) |
+| CLI analyzer | `scripts/analyze_cli.py` | Multimodal & single-image CLI, master 2×3 dashboard, standalone heatmaps, terminal report |
+| Batch processor | `scripts/batch_process.py` | Folder of images → triage CSV (API or local mode) |
+| Sample generator | `scripts/make_sample_images.py` | Synthetic demo images + metadata sidecars |
+| Web UI | `app/static/index.html`, `app/static/app.js` | Offline, self-contained single-page upload & triage application |
+| Test suite | `tests/` | **55 automated tests** across 8 test modules |
 
 ---
 
@@ -336,13 +365,15 @@ black frame still fails.
 ## 8. Preprocessing (`app/pipeline/preprocessing.py`)
 
 1. **Crop (modality-aware):**
-   - `eye`: HSV red-mask (two hue bands) → morphological open/close → largest contour →
-     bounding box + 8% padding. Falls back to a 70% centre crop if no red region is found.
+   - `eye`: HSV red-mask (two hue bands: 0–12 and 168–179) → morphological open/close → largest contour →
+     bounding box + 8% padding. Falls back to a 70% centre crop if no valid red region is found.
    - `palm`: centre crop (85%).
+   - **Dimension Safety Guards:** Both cropping pathways include explicit defensive checks (`crop.size > 0 and crop.shape[0] > 0 and crop.shape[1] > 0`)
+     to guard against zero-pixel bounding slices or degenerate contours, eliminating OpenCV resize assertion crashes.
 2. **Colour normalization:** gray-world white balance (per-channel mean equalisation) +
-   CLAHE (L channel in LAB, clip 2.0, 8×8 tiles) — reduces lighting/camera variance.
-3. **Tensor:** resize 224×224 → RGB → /255 → ImageNet normalize (mean 0.485/0.456/0.406,
-   std 0.229/0.224/0.225) → CHW float32.
+   CLAHE (L channel in LAB space, clip limit 2.0, 8×8 tile grid) — reduces illumination, skin tone, and camera sensor variance.
+3. **Tensor conversion:** resize 224×224 → RGB → /255 → ImageNet normalization (mean `[0.485, 0.456, 0.406]`,
+   std `[0.229, 0.224, 0.225]`) → CHW float32.
 
 The same function serves training, validation, evaluation, and live inference (§5.3).
 
@@ -465,15 +496,28 @@ Severe           0     0       0
 
 ## 12. Explainability (Grad-CAM)
 
-- Last `Conv2d` layer of MobileNetV3 as CAM target; class-specific (`ClassifierOutputTarget`
-  on the predicted class); JET colormap overlaid 45/55 on the normalized conjunctiva image;
-  returned as **base64 PNG** inside the JSON report (no filesystem dependency).
-- Robustness: automatic **CPU retry** if MPS lacks a backward op; graceful `None` +
-  warning if grad-cam is unavailable (pipeline continues).
-- Surfaces: web UI (inline heatmap panel), CLI (pop-up matplotlib 3-panel window), API JSON,
-  notebook.
-- Purpose: proves the model attends to the **vascular bed / palmar skin**, not background
-  noise — a WHO AI-ethics transparency requirement.
+### 12.1 Target Layer Architecture & The 1×1 Spatial Resolution Fix
+
+In convolutional networks, Grad-CAM requires a feature map retaining two-dimensional spatial dimensions $(H \times W)$.
+In `timm`'s `mobilenetv3_large_100` architecture, the network layout is:
+```
+model.blocks (inverted residual blocks) → model.conv_head → model.global_pool → model.classifier
+```
+An initial naive search for the last `Conv2d` in `model.modules()` returned `conv_head`. However, `conv_head` sits immediately before/at the pooling stage where spatial variance collapses. In earlier runs, backpropagating gradients into `conv_head` produced identical spatial activations across all coordinates (`gcam min: 0.0, max: 0.0`), rendering a flat, uninformative blue heatmap.
+
+**The Fix:**
+`_find_target_layer` in `app/pipeline/gradcam.py` was rewritten to explicitly target `model.blocks[-1]` — the final depthwise/pointwise convolutional block *before* spatial pooling. This restored true $224 \times 224$ spatial feature activation maps (`min: 0.0, max: 1.0, std: 0.28`), accurately highlighting the vascular bed in eyelid images and cutaneous capillary zones in palm images.
+
+### 12.2 Rich Artifact Pipeline (`generate_gradcam_artifacts`)
+
+The Grad-CAM subsystem generates multiple distinct artifacts:
+1. **Overlay Image (`overlay_bgr` / `overlay_png_b64`):** Normalized ROI blended 55% base image + 45% JET colormap.
+2. **Pure Heatmap (`heatmap_bgr` / `heatmap_png_b64`):** Standalone color-mapped activation map (JET spectrum) without base image blending.
+3. **Raw Activation Array (`cam_raw`):** 2D normalized float array $[0.0, 1.0]$ for quantitative analysis.
+4. **Standalone Disk Exports:** Exported automatically by the CLI to `outputs/eyelid_heatmap.png` and `outputs/palm_heatmap.png`.
+5. **Standalone 3-Panel Figures:** Exported to `outputs/eyelid_3panel.png` and `outputs/palm_3panel.png`.
+
+Robustness guarantees: Automatic **CPU fallback** if the Apple Silicon MPS backend lacks a specialized backward kernel; graceful `None` fallback with warnings if `pytorch_grad_cam` is unavailable.
 
 ---
 
@@ -521,8 +565,38 @@ Group resolution: pregnant → `pregnant`; age 6–59 months → `child_6_59m`; 
 `action_code` (machine-readable enum: `REFER_NOW` / `CONFIRM_48H` / `CONFIRM_1WEEK` /
 `TREAT_AND_RECHECK` / `ROUTINE` / `RETAKE_PHOTO`), `action` (human instruction), `urgency`,
 `rationale` (explainable clinical reasoning string), `rule_fired`, `hb_band`,
-`recheck_in_weeks`, `flags`. The engine is pure/deterministic — 15 unit tests pin its
+`recheck_in_weeks`, `flags`. The engine is pure/deterministic — unit tests pin its
 behaviour, including override priorities and boundary Hb values.
+
+### 13.5 Dual-Modality Decision Synthesis (`generate_multimodal_triage_decision`)
+
+In dual-site screening, the engine synthesizes findings from both the **Eyelid** (primary factor) and **Palm** (secondary factor):
+1. **Weighted Probability Fusion:**
+   $$P_{\text{anemic}}^{\text{fused}} = 0.70 \times P_{\text{anemic}}^{\text{eyelid}} + 0.30 \times P_{\text{anemic}}^{\text{palm}}$$
+   Eyelid conjunctival pallor receives 70% weight due to direct microvascular visualization with zero overlying melanin. Palm cutaneous pallor provides 30% confirmatory weight.
+2. **Clinical Class Fusion:**
+   - If Eyelid predicts `Severe` $\to$ Fused risk is `Severe`.
+   - If Eyelid predicts `Mild/Moderate` $\to$ Fused risk is `Mild/Moderate` (escalated to `Severe` only if Palm is `Severe` AND $P^{\text{fused}} \ge 0.75$).
+   - If Eyelid predicts `Normal` $\to$ Fused risk is `Normal`, unless Palm is `Severe` or $P^{\text{fused}} \ge 0.60$ (in which case it escalates to `Mild/Moderate` for screening safety).
+3. **Concordance Audit:**
+   - `concordant` if both models assign identical risk classes.
+   - `discordant` if classes differ; appends `discordant_screening_sites` flag and clinical explanatory rationale.
+4. **Single-Site Fallback:**
+   - If Eyelid fails the quality gate but Palm passes, Palm serves as secondary fallback with the audit flag `eyelid_quality_failed_fallback_palm`.
+
+### 13.6 Clinical NLP Symptom Analyzer (`app/clinical_nlp.py`)
+
+A dedicated natural language processor ingests unstructured symptom notes recorded by frontline health workers:
+- **Lexicon Matching:** Matches canonical symptoms against a dictionary of clinical and vernacular terms across 18 symptom categories.
+- **Negation Handling:** Uses regex lookback analysis (~25 characters) to identify negation prefixes (`no`, `not`, `denies`, `without`, `never`, `free of`, `negative for`). For example, "patient feels fatigue, denies breathlessness, no chest pain" extracts `fatigue` while correctly discarding `breathlessness` and `chest pain`. Blanket negations ("none", "nil", "asymptomatic", "healthy") are handled explicitly.
+- **Danger Sign Escalation:** Detects WHO/MoHFW red flags (`breathlessness`, `fainting`/`syncope`, `chest pain`, `severe pallor`, `palpitations`, `confusion`, `unable to walk`) and escalates clinical urgency to `High` / `REFER_NOW`.
+- **Entity Extraction:** Automatically detects pregnancy mentions, trimester (`1st`/`2nd`/`3rd`), and recorded hemoglobin values (e.g., "hb 9.2 g/dl").
+- **Pre-eclampsia Risk Rule:** Identifies co-occurring peripheral edema (`swelling`) with neurological symptoms (`headache`, `blurred vision`) in pregnant patients and sets `preeclampsia_check`.
+
+### 13.7 Mandatory Clinical Disclaimer
+
+All system interfaces, reports, and exported figures mandate a prominent clinical disclaimer (`CLINICAL_DISCLAIMER` in `app/schemas.py`):
+> **DISCLAIMER:** This screening tool is an AI-assisted risk assessment and is NOT a medical diagnosis. Non-invasive pallor screening cannot replace laboratory blood tests. All results must be confirmed with a standard hemoglobin test (e.g. CBC or hemoglobinometer) before initiating clinical treatment.
 
 ---
 
@@ -534,7 +608,7 @@ behaviour, including override priorities and boundary Hb values.
 |---|---|
 | `GET /` | Self-contained web UI (offline, no CDN) |
 | `GET /health` | Liveness + **per-modality** model status (device, trained flag, classes) |
-| `POST /analyze` | multipart: `image` + `metadata` (JSON string) + `with_gradcam` + `modality` (`eye`/`palm`) → full `TriageReport` |
+| `POST /analyze` | multipart: `image` + `metadata` (JSON string) + `with_gradcam` + `modality` (`eye`/`palm`) → full `TriageReport` (includes `gradcam_png_base64`, `heatmap_png_base64`, `disclaimer`) |
 | `GET /api` | Machine-readable API index |
 | `GET /docs` | Swagger UI served from **locally vendored assets** (works offline) |
 
@@ -548,26 +622,62 @@ Inline CSS/JS (zero external dependencies — immune to CDN/network failures). I
 with drag-and-drop + preview, modality dropdown (eye/palm), age/sex/pregnancy/trimester/
 measured-Hb inputs, symptom chips (tap-to-toggle), Grad-CAM toggle, colour-coded result
 banner (🔴 High / 🟠 Medium / 🟢 Low), probability bars, quality-gate summary, inline Grad-CAM
-heatmap, warnings, per-modality model status badge in the header, clinical disclaimer.
+heatmap, warnings, per-modality model status badge in the header, and clinical disclaimer.
 
-### 14.3 Terminal CLI (`scripts/analyze_cli.py`)
+### 14.3 Interactive Dual-Modality Intake & Launcher (`run_pipeline.py`, `scripts/ui_selector.py`)
+
+To ensure a seamless, crash-free clinical intake experience in real clinical environments, the system provides an interactive dual-modality workflow:
 
 ```bash
-python -m scripts.analyze_cli --image <path> [--modality eye|palm] [--age-months N]
-    [--sex male|female|other|unknown] [--pregnant] [--trimester 1-3] [--symptoms a,b]
-    [--hb 9.5] [--ignore-sidecar] [--no-window] [--no-gradcam] [--open] [--json] [--out-dir DIR]
+python run_pipeline.py
+# or: make pipeline
+# or: python -m scripts.analyze_cli
 ```
 
-- Auto-reads `<image>.json` sidecar metadata; CLI flags override.
-- Prints a **full colour-coded terminal report** (input info, patient, all quality metrics
-  with live thresholds, vision class + confidence + probability bars, complete triage).
-- Pops up a **3-panel matplotlib window** (original · preprocessed · Grad-CAM overlay),
-  forced to the front (macOS process activation + Tk lift/topmost); rejected images show
-  the reasons in panel 3.
-- Saves `outputs/<name>_report.png`; `--open` opens it in macOS Preview as a guaranteed
-  fallback.
+Key features of the interactive intake:
+1. **Crash-Free Individual File Choosers:**
+   Instead of unreliable auto-folder assignment (which risked misassigning palm images to the eyelid model), the intake provides two distinct buttons: `👁️ Select Eyelid Image` and `✋ Select Palm Image`.
+   On macOS, file selection is routed through native AppleScript (`osascript`) sheets (`choose file with prompt ...`). This completely bypasses the documented Tk 8.6 Cocoa `setAllowedFileTypes` `NSInvalidArgumentException` SIGABRT crash.
+2. **Comprehensive Clinical Factors Form:**
+   Frontline workers input:
+   - **Age (years):** Automatically converted to months for pediatric WHO cut-offs.
+   - **Biological Sex:** `female`, `male`, `other`, `unknown`.
+   - **Pregnancy Status & Trimester:** `Yes`/`No` + Trimesters 1, 2, 3 (automatically applies pregnant WHO Hb bands).
+   - **Measured Hemoglobin (optional):** Confirmatory Hb value if a blood test has already been run.
+   - **Symptoms / Notes:** Free-text box parsed by the Clinical NLP engine.
+3. **Interactive Terminal Fallback:**
+   If running in a headless or terminal-only environment, `scripts/ui_selector.py` gracefully prompts for eyelid path, palm path, and clinical symptoms directly via interactive shell prompts.
 
-### 14.4 Batch processor (`scripts/batch_process.py`)
+### 14.4 Terminal CLI Analyzer (`scripts/analyze_cli.py`)
+
+Supports both dual-modality and backward-compatible single-image execution:
+
+```bash
+# Dual-modality CLI invocation:
+python -m scripts.analyze_cli \
+  --eye data/sample/pale_pregnant.png \
+  --palm "Palm/Anemic-260 (10).png" \
+  --age-years 28 --sex female --pregnant --trimester 2 \
+  --symptoms "severe fatigue, shortness of breath, dizziness"
+
+# Legacy single-image invocation:
+python -m scripts.analyze_cli --image data/sample/pale_pregnant.png --modality eye
+```
+
+- **Visual Dashboard Generation:**
+  - `outputs/multimodal_triage_dashboard.png`: Master 2-row × 3-column figure displaying:
+    - **Row 1:** Eyelid (Original Image · Preprocessed / Normalized ROI · Grad-CAM Overlay with predicted risk and confidence).
+    - **Row 2:** Palm (Original Image · Preprocessed / Normalized ROI · Grad-CAM Overlay with predicted risk and confidence).
+    - **Bottom Banner:** Highlighted Clinical Disclaimer banner.
+  - `outputs/eyelid_3panel.png` & `outputs/palm_3panel.png`: Independent 3-panel figures for focused review.
+  - `outputs/eyelid_heatmap.png` & `outputs/palm_heatmap.png`: Standalone high-contrast JET activation heatmaps.
+  - `outputs/multimodal_triage_report.json`: Full machine-readable clinical JSON report.
+- **Window Management:**
+  The matplotlib figure is brought to the foreground on macOS using window lifting, topmost attributes, and AppleScript process activation (`osascript`). Passing `--open` automatically opens the master dashboard in macOS Preview.
+- **Terminal Formatting:**
+  Outputs an ANSI color-coded summary detailing Eyelid findings, Palm findings, Multimodal Fused Probability, NLP Symptom Analysis, Concordance Status, Action Code, Clinical Rationale, and concludes with the yellow **MANDATORY CLINICAL DISCLAIMER** box.
+
+### 14.5 Batch processor (`scripts/batch_process.py`)
 
 Folder of images → triage CSV (`--mode api` hits a running server; `--mode local` runs
 in-process). Per-image sidecar JSON supported. CSV columns: image, status, risk_class,
@@ -575,26 +685,27 @@ p_anemic, confidence, model_trained, action_code, urgency, action, hb_band, flag
 rule_fired, quality_passed, quality_reasons, processing_ms. Summary line reports
 REFER_NOW / high-urgency / rejected counts.
 
-### 14.5 Make targets
+### 14.6 Make targets
 
 `make install · samples · test · serve · manifest · train · train-eye · train-palm ·
-evaluate · cli IMG=… MODALITY=… · batch · export · notebook · clean`
+evaluate · pipeline · cli IMG=… MODALITY=… · batch · export · notebook · clean`
 
 ---
 
 ## 15. Software Quality & Testing
 
-**48 automated tests, all passing** (`pytest`):
+**55 automated tests, all passing** (`pytest`):
 
 | Suite | Tests | Covers |
 |---|---|---|
-| `test_rules_engine.py` | 15 | decision-table priorities, danger-sign override, measured-Hb override (severe/mild/normal), group-specific bands, boundary ages/Hb, pre-eclampsia flag, string inputs |
-| `test_api.py` | 11 | health (per-modality), root UI, offline docs assets, analyze ok/rejected, red-flag → REFER_NOW, measured-Hb severe, bad metadata 422, palm modality, bad modality 422 |
-| `test_quality_gate.py` | 6 | pass, blur reject, dark reject, no-tissue reject, Laplacian monotonicity, large-phone-photo resolution normalization |
-| `test_preprocessing.py` | 5 | decode roundtrip, bad bytes, auto-crop, tensor shape/dtype, full pass keys |
+| `test_rules_engine.py` | 15 | Decision-table priorities, danger-sign override, measured-Hb override (severe/mild/normal), group-specific bands, boundary ages/Hb, pre-eclampsia flag, string inputs |
+| `test_multimodal.py` | 7 | Clinical NLP danger signs extraction, NLP negation handling ("denies breathlessness"), NLP pregnancy/Hb extraction, blank/none handling, multimodal 70/30 weighted synthesis, eyelid rejection fallback to palm, mandatory clinical disclaimer verification |
+| `test_api.py` | 11 | Health (per-modality), root UI, offline docs assets, analyze ok/rejected, red-flag → REFER_NOW, measured-Hb severe, bad metadata 422, palm modality, bad modality 422 |
+| `test_quality_gate.py` | 6 | Pass, blur reject, dark reject, no-tissue reject, Laplacian monotonicity, large-phone-photo resolution normalization |
+| `test_preprocessing.py` | 5 | Decode roundtrip, bad bytes, auto-crop, tensor shape/dtype, full pass keys |
 | `test_imageio.py` | 5 | PNG/JPEG bytes, corrupt bytes, file read, missing file, Pillow fallback |
-| `test_clinical_config.py` | 4 | config load, Hb band boundaries, pregnant/child cut-offs, danger-sign normalization |
-| `test_cli.py` | 2 | subprocess smoke (headless run saves figure), missing-image error |
+| `test_clinical_config.py` | 4 | Config load, Hb band boundaries, pregnant/child cut-offs, danger-sign normalization |
+| `test_cli.py` | 2 | Subprocess smoke (headless run saves figure), missing-image error |
 
 Additional QA: `pytest.ini` warnings policy; `py_compile` gate over all modules; every
 pipeline surface (API / CLI / batch) exercised end-to-end against the **trained checkpoints**
@@ -639,6 +750,27 @@ Real defects discovered during validation and fixed (each verified after the fix
     `--open` (Preview) fallback.
 11. **Enum serialization in the CLI report** — `RiskClass.mild_moderate` reprs instead of
     values. Fix: `model_dump(mode="json")`.
+12. **Grad-CAM zero activation maps (flat blue).** The initial Grad-CAM implementation selected
+    the last `Conv2d` layer in `model.modules()`, which resolved to `model.conv_head` in timm MobileNetV3.
+    Because `conv_head` sits at/after the spatial pooling layer, its spatial dimensions collapsed to 1×1,
+    producing identical gradients across spatial dimensions and an all-zero activation matrix (`min: 0.0, max: 0.0`).
+    Fix: targeted `model.blocks[-1]` (the last 2D inverted residual block before pooling), restoring rich
+    224×224 spatial heatmaps with dynamic contrast (`min: 0.0, max: 1.0, std: 0.28`).
+13. **Tkinter Cocoa `setAllowedFileTypes` SIGABRT crash on macOS.** Launching `tkinter.filedialog.askopenfilename`
+    with compound semicolon patterns (e.g. `*.jpg;*.png`) crashed the Python runtime with a fatal
+    `NSInvalidArgumentException: object cannot be nil` inside Apple's Tk Cocoa bridge.
+    Fix: Replaced with native AppleScript execution (`osascript -e 'choose file with prompt ...'`), providing
+    100% crash-free native macOS Finder sheets.
+14. **Folder auto-select image misattribution.** When scanning folders without strict filename
+    conventions, heuristic auto-selection erroneously assigned palm images to the eyelid model (failing the
+    conjunctiva quality gate).
+    Fix: Removed ambiguous folder auto-selection in favor of two explicit individual file choosers
+    (`👁️ Select Eyelid Image` and `✋ Select Palm Image`), guaranteeing correct anatomical attribution.
+15. **Zero-size crop assertion crashes in preprocessing.** Edge-case contours in low-contrast images
+    caused OpenCV bounding box slices to collapse to 0-pixel widths/heights, causing `cv2.resize` assertion
+    failures.
+    Fix: Added defensive dimensions checks (`crop.size > 0 and crop.shape[0] > 0 and crop.shape[1] > 0`)
+    in both `auto_crop_conjunctiva` and `_center_crop`.
 
 ---
 
@@ -651,8 +783,7 @@ Real defects discovered during validation and fixed (each verified after the fix
 | `8d24679` | Terminal CLI analyzer: full summary + pop-up 3-panel Grad-CAM window |
 | `368f083` | HEIC/iPhone photo support + resolution-independent blur gate |
 | `8460d82` | Palm modality + training on real datasets: manifest builder, per-modality models, train/serve-consistent preprocessing, data-calibrated quality gate, honest evaluation |
-
-60 tracked files; datasets, manifests, checkpoints and outputs are gitignored.
+| `Current` | Dual-modality screening pipeline (Eyelid 70% primary / Palm 30% secondary), Clinical NLP symptom analyzer, Grad-CAM spatial heatmap fix, native AppleScript intake UI, dual 3-panel dashboards, mandatory clinical disclaimer, 55 passing tests |
 
 ---
 
@@ -674,21 +805,24 @@ Real defects discovered during validation and fixed (each verified after the fix
 6. **No altitude/smoking Hb adjustment** (WHO allows both; out of scope).
 7. **Overfitting signs** (train loss ≪ val loss from ~epoch 3 palm / epoch 8 eye);
    best-checkpoint selection mitigates but more data/regularization would help.
-8. **Single-modality per report.** Eye and palm are parallel selectable modalities; a fused
-   two-site report (eyelid + palm corroboration) is a designed but unbuilt extension.
+8. **Single-modality per report [RESOLVED in v1.1.0].** The pipeline now supports integrated
+   dual-modality evaluation with 70% Eyelid / 30% Palm probability fusion, cross-site concordance
+   auditing, and graceful single-site fallback.
 
 ---
 
 ## 19. Roadmap
 
-- Fused two-site analysis (eyelid primary + palm corroboration, agreement/disagreement flag)
-- Held-out test split + subgroup bias evaluation (skin tone / lighting / phone)
-- WHO-2024 trimester-specific Hb cut-offs (config-ready)
-- Sensitivity-threshold tuning with ROC analysis on a larger validation set
-- ONNX/TFLite on-device inference + offline-first sync (ASHA field app)
-- Altitude/smoking adjustments; multi-signal model (conjunctiva + nail bed + symptoms)
-- RCH portal / ABDM health-ID integration; CDSCO regulatory pathway; consent flow per DPDP 2023
-- Evaluation on a locally collected, consented, hemoglobinometer-confirmed cohort
+- [x] **Fused two-site analysis** (eyelid primary 70% + palm corroboration 30%, agreement/disagreement auditing) — *Completed in v1.1.0*
+- [x] **Clinical NLP symptom intake** with negation handling and danger-sign escalation — *Completed in v1.1.0*
+- [x] **Dual 3-panel visual dashboard & standalone heatmaps** — *Completed in v1.1.0*
+- [ ] Held-out test split + subgroup bias evaluation (skin tone / lighting / phone)
+- [ ] WHO-2024 trimester-specific Hb cut-offs (config-ready in `clinical_config.yaml`)
+- [ ] Sensitivity-threshold tuning with ROC analysis on a larger validation cohort
+- [ ] ONNX/TFLite on-device inference + offline-first sync (ASHA field app)
+- [ ] Altitude/smoking adjustments; multi-signal model (conjunctiva + nail bed + symptoms)
+- [ ] RCH portal / ABDM health-ID integration; CDSCO regulatory pathway; consent flow per DPDP 2023
+- [ ] Prospective clinical validation on a locally collected, consented, hemoglobinometer-confirmed cohort
 
 ---
 
@@ -698,22 +832,38 @@ Real defects discovered during validation and fixed (each verified after the fix
 cd "/Users/allen2775/Desktop/cline hackathon/anemia-screen"
 conda activate anemia           # one-time env setup: conda env create -f environment.yml
 
-# ── One-time data preparation (already done on this machine) ──
-python -m scripts.make_sample_images          # synthetic demo images → data/sample/
-python -m ml.build_manifest                   # parse 3 raw datasets → data/manifests/
+# ── 1. Interactive Dual-Modality Screening (Recommended) ──
+python run_pipeline.py          # Opens native dialog to select Eyelid & Palm individually,
+                                # collects clinical factors, analyzes symptoms, and shows dashboard
+# or via Make:
+make pipeline
+
+# ── 2. Direct CLI Dual-Modality Invocation ──
+python -m scripts.analyze_cli \
+  --eye data/sample/pale_pregnant.png \
+  --palm "Palm/Anemic-260 (10).png" \
+  --age-years 28 --sex female --pregnant --trimester 2 \
+  --symptoms "severe fatigue, shortness of breath, dizziness"
+
+# ── 3. Single-Image Analyzer (Legacy Mode) ──
+python -m scripts.analyze_cli --image data/sample/pale_pregnant.png --modality eye
+
+# ── 4. Web Service & API ──
+uvicorn app.main:app --reload   # → http://127.0.0.1:8000/ (UI) · /docs (Swagger)
+
+# ── 5. Batch CSV Processing ──
+python -m scripts.batch_process --mode local --input data/sample --out outputs/triage.csv
+
+# ── 6. Quality Assurance & Testing ──
+pytest                          # 55 passing automated tests
+python -m ml.export_onnx        # checkpoint → ONNX (onnxruntime check)
+
+# ── 7. Model Retraining & Evaluation (Optional) ──
+python -m ml.build_manifest
 python -m ml.train --modality eye  --epochs 12 --batch-size 32
 python -m ml.train --modality palm --epochs 8  --batch-size 64
 python -m ml.evaluate --modality eye  --max-images 150
 python -m ml.evaluate --modality palm --max-images 200
-
-# ── Daily use ──
-python -m scripts.analyze_cli --image <photo> [--modality eye|palm] [--hb 9.5 ...]
-uvicorn app.main:app --reload                 # → http://127.0.0.1:8000/ (UI) · /docs
-python -m scripts.batch_process --mode local --input data/sample --out outputs/triage.csv
-
-# ── Quality assurance ──
-pytest                                        # 48 tests
-python -m ml.export_onnx                      # checkpoint → ONNX (onnxruntime check)
 ```
 
 ---

@@ -55,6 +55,8 @@ def auto_crop_conjunctiva(bgr: np.ndarray) -> np.ndarray:
     centred 70% crop when no sufficiently large red blob is found.
     """
     h, w = bgr.shape[:2]
+    if h < 10 or w < 10:
+        return bgr
     mask = _red_mask(bgr)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -70,14 +72,15 @@ def auto_crop_conjunctiva(bgr: np.ndarray) -> np.ndarray:
             x1 = min(w, x + bw + pad_x)
             y1 = min(h, y + bh + pad_y)
             crop = bgr[y0:y1, x0:x1]
-            if crop.size > 0:
+            if crop.size > 0 and crop.shape[0] > 0 and crop.shape[1] > 0:
                 return crop
 
     # Fallback: centre crop (70% of each dimension).
     ch, cw = int(h * 0.7), int(w * 0.7)
-    y0 = (h - ch) // 2
-    x0 = (w - cw) // 2
-    return bgr[y0 : y0 + ch, x0 : x0 + cw]
+    y0 = max(0, (h - ch) // 2)
+    x0 = max(0, (w - cw) // 2)
+    crop = bgr[y0 : y0 + ch, x0 : x0 + cw]
+    return crop if crop.size > 0 else bgr
 
 
 def normalize_color(bgr: np.ndarray) -> np.ndarray:
@@ -119,9 +122,12 @@ def to_model_tensor(bgr: np.ndarray) -> np.ndarray:
 def _center_crop(bgr: np.ndarray, frac: float = 0.85) -> np.ndarray:
     """Simple centred crop — used for non-conjunctiva modalities (palm/nail)."""
     h, w = bgr.shape[:2]
+    if h < 10 or w < 10:
+        return bgr
     ch, cw = int(h * frac), int(w * frac)
-    y0, x0 = (h - ch) // 2, (w - cw) // 2
-    return bgr[y0:y0 + ch, x0:x0 + cw]
+    y0, x0 = max(0, (h - ch) // 2), max(0, (w - cw) // 2)
+    crop = bgr[y0:y0 + ch, x0:x0 + cw]
+    return crop if crop.size > 0 and crop.shape[0] > 0 and crop.shape[1] > 0 else bgr
 
 
 def preprocess(bgr: np.ndarray, modality: str = "eye") -> dict[str, np.ndarray]:

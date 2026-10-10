@@ -168,6 +168,15 @@ class TriageDecision(BaseModel):
     )
 
 
+# Mandatory clinical disclaimer string.
+CLINICAL_DISCLAIMER: str = (
+    "DISCLAIMER: This screening tool is an AI-assisted risk assessment and is "
+    "NOT a medical diagnosis. Non-invasive pallor screening cannot replace "
+    "laboratory blood tests. All results must be confirmed with a standard hemoglobin "
+    "test (e.g. CBC or hemoglobinometer) before initiating clinical treatment."
+)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Top-level response
 # ──────────────────────────────────────────────────────────────────────────────
@@ -180,7 +189,14 @@ class TriageReport(BaseModel):
     vision: Optional[VisionPrediction] = None
     triage: Optional[TriageDecision] = None
     gradcam_png_base64: Optional[str] = Field(
-        default=None, description="Base64-encoded Grad-CAM heatmap (PNG)."
+        default=None, description="Base64-encoded Grad-CAM heatmap overlay (PNG)."
+    )
+    heatmap_png_base64: Optional[str] = Field(
+        default=None, description="Base64-encoded pure Grad-CAM heatmap (PNG)."
     )
     processing_ms: float = 0.0
     warnings: list[str] = Field(default_factory=list)
+    disclaimer: str = Field(
+        default=CLINICAL_DISCLAIMER,
+        description="Mandatory clinical disclaimer indicating this is screening, not diagnosis.",
+    )
