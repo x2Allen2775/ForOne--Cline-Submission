@@ -7,6 +7,7 @@
 numpy>=1.26,<2.2
 pandas>=2.1,<2.3
 pillow>=10.2
+pillow-heif>=0.16  # decode iPhone HEIC/HEIF photos
 opencv-python>=4.9,<4.11
 
 # --- Deep learning (MobileNetV3 via timm) ---

@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     device: str = "auto"
 
     # ── Quality Gate thresholds (plan §3, Hour 3) ──
+    # Downscale the longest edge to this before measuring quality, so blur/exposure
+    # metrics are resolution-independent (12-MP phone photos vs. small images).
+    qc_work_max_edge: int = 1024
     # Variance of the Laplacian below this => image considered blurry.
     blur_min_variance: float = 100.0
     # Mean luminance (0-255) must sit inside this window.

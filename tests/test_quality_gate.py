@@ -54,3 +54,17 @@ def test_laplacian_variance_monotonic_with_blur():
     sharp = cv2.cvtColor(_reddish(blur=0), cv2.COLOR_BGR2GRAY)
     blurry = cv2.cvtColor(_reddish(blur=9), cv2.COLOR_BGR2GRAY)
     assert laplacian_variance(sharp) > laplacian_variance(blurry)
+
+
+def test_large_sharp_image_passes_after_resolution_normalization():
+    # A big (phone-sized) but sharp image must NOT be wrongly flagged as blurry;
+    # the quality gate downscales to a standard working size first. We add fine
+    # random reddish noise so the image stays sharp at any scale (like a real photo).
+    rng = np.random.default_rng(0)
+    big = np.zeros((3000, 4000, 3), dtype=np.uint8)
+    big[:, :, 2] = rng.integers(140, 230, size=(3000, 4000))  # red channel texture
+    big[:, :, 1] = rng.integers(40, 90, size=(3000, 4000))
+    big[:, :, 0] = rng.integers(40, 90, size=(3000, 4000))
+    report = assess_quality(big)
+    assert report.passed, report.reasons
+    assert report.blur_variance >= 100

@@ -267,9 +267,13 @@ def main() -> int:
         print(C.red(f"[cli] image not found: {image_path}"))
         return 1
 
-    bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-    if bgr is None:
-        print(C.red(f"[cli] could not decode image: {image_path}"))
+    # HEIC-aware loader (handles iPhone photos via pillow-heif + Pillow fallback).
+    from app.imageio import read_image
+
+    try:
+        bgr = read_image(image_path)
+    except Exception as exc:
+        print(C.red(f"[cli] could not decode image: {exc}"))
         return 1
 
     # Deferred heavy imports (torch) so --help stays fast.

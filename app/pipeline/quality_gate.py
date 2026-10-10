@@ -32,6 +32,25 @@ def _to_bgr_uint8(image: np.ndarray) -> np.ndarray:
     return img
 
 
+def _normalize_resolution(bgr: np.ndarray) -> np.ndarray:
+    """
+    Downscale so the longest edge == ``settings.qc_work_max_edge``.
+
+    Blur (variance of Laplacian) is resolution-dependent: a huge 12-MP phone
+    photo has each edge smeared across many pixels, which deflates the variance
+    and would wrongly flag a sharp photo as blurry. Normalising to a standard
+    working size makes the thresholds resolution-independent.
+    """
+    max_edge = settings.qc_work_max_edge
+    h, w = bgr.shape[:2]
+    longest = max(h, w)
+    if longest <= max_edge:
+        return bgr
+    scale = max_edge / float(longest)
+    new_size = (max(1, int(round(w * scale))), max(1, int(round(h * scale))))
+    return cv2.resize(bgr, new_size, interpolation=cv2.INTER_AREA)
+
+
 def laplacian_variance(gray: np.ndarray) -> float:
     """Return the variance of the Laplacian — a classic focus measure."""
     return float(cv2.Laplacian(gray, cv2.CV_64F).var())
@@ -78,6 +97,9 @@ def assess_quality(image: np.ndarray) -> QualityReport:
     QualityReport with per-check metrics and an overall ``passed`` flag.
     """
     bgr = _to_bgr_uint8(image)
+    # Normalise resolution so blur/exposure metrics are size-independent
+    # (e.g. 12-MP iPhone photos vs. small web images).
+    bgr = _normalize_resolution(bgr)
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
 
     blur_var = laplacian_variance(gray)

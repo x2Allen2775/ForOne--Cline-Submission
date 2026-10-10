@@ -22,12 +22,15 @@ from app.config import settings
 
 
 def decode_image(data: bytes) -> np.ndarray:
-    """Decode raw image bytes into a BGR uint8 array."""
-    buf = np.frombuffer(data, dtype=np.uint8)
-    img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
-    if img is None:
-        raise ValueError("Could not decode image bytes (unsupported/corrupt file).")
-    return img
+    """
+    Decode raw image bytes into a BGR uint8 array.
+
+    Delegates to :func:`app.imageio.decode_image`, which handles HEIC/HEIF
+    (iPhone photos) and other formats OpenCV can't read.
+    """
+    from app.imageio import decode_image as _decode
+
+    return _decode(data)
 
 
 def _red_mask(bgr: np.ndarray) -> np.ndarray:

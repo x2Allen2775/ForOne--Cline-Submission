@@ -28,7 +28,7 @@ import json
 import sys
 from pathlib import Path
 
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".heic", ".heif"}
 
 
 def _load_metadata(img_path: Path, default: dict) -> dict:
@@ -85,16 +85,16 @@ def run_api(images: list[Path], url: str, default_meta: dict, with_gradcam: bool
 
 
 def run_local(images: list[Path], default_meta: dict, with_gradcam: bool) -> list[dict]:
-    import cv2
-
+    from app.imageio import read_image
     from app.pipeline.orchestrator import analyze_image
     from app.schemas import PatientMetadata
 
     rows = []
     for p in images:
         meta = _load_metadata(p, default_meta)
-        bgr = cv2.imread(str(p), cv2.IMREAD_COLOR)
-        if bgr is None:
+        try:
+            bgr = read_image(p)
+        except Exception:
             rows.append({"image": p.name, "status": "error_decode"})
             continue
         report = analyze_image(bgr, PatientMetadata(**meta), with_gradcam=with_gradcam)
