@@ -87,18 +87,25 @@ pip install -r requirements.txt
 # 2) Generate synthetic demo images (works before you download real data)
 python -m scripts.make_sample_images
 
-# 3) Run the API + web UI
+# 3) ⭐ Terminal analyzer — full summary in the terminal + pop-up Grad-CAM window
+python -m scripts.analyze_cli --image data/sample/pale_pregnant.png
+#   • prints a color-coded report (quality gate, model, WHO triage) to the terminal
+#   • pops up a 3-panel window: original · preprocessed · Grad-CAM overlay
+#   • also saves outputs/<image>_report.png
+#   extra flags: --hb 9.5  --pregnant  --symptoms fatigue,fainting  --no-window  --json
+
+# 4) (Optional) Run the API + web UI instead
 uvicorn app.main:app --reload
 # → open http://127.0.0.1:8000/        (self-contained web UI — upload & triage)
 # → open http://127.0.0.1:8000/docs    (interactive Swagger, served offline)
 
-# 4) Analyze one image (micro demo)
+# 5) Analyze one image via the API (micro demo)
 curl -s -X POST http://127.0.0.1:8000/analyze \
   -F "image=@data/sample/pale_pregnant.png" \
   -F 'metadata={"age_months":312,"is_pregnant":true,"trimester":2,"symptoms":["tiredness"]}' \
   -F "with_gradcam=true" | python -m json.tool
 
-# 5) Batch demo (macro) → CSV "ministry dashboard"
+# 6) Batch demo (macro) → CSV "ministry dashboard"
 python -m scripts.batch_process --mode local --input data/sample --out outputs/triage.csv
 ```
 

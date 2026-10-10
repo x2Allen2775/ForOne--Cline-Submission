@@ -1,7 +1,7 @@
 # Convenience targets for the Anemia-Screen pipeline.
 # Assumes the 'anemia' conda env is active (conda activate anemia).
 
-.PHONY: install samples test serve batch notebook export clean
+.PHONY: install samples test serve batch cli notebook export clean
 
 install:
 	pip install -r requirements.txt
@@ -14,6 +14,12 @@ test:
 
 serve:
 	uvicorn app.main:app --reload
+
+# Terminal analyzer with a pop-up 3-panel Grad-CAM window.
+# Usage: make cli IMG=data/sample/pale_pregnant.png
+IMG ?= data/sample/pale_pregnant.png
+cli:
+	python -m scripts.analyze_cli --image $(IMG)
 
 batch:
 	python -m scripts.batch_process --mode local --input data/sample --out outputs/triage.csv
