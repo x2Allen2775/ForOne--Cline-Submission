@@ -82,48 +82,76 @@ Implements the **Anemia Loop** decision table. Rules are evaluated **most-urgent
 
 ---
 
-## 🚀 Quick start
+## 🚀 Quick Start — Terminal Screening Pipeline
 
+The primary workflow for Anemia-Screen is the **Terminal Screening Pipeline**. It runs 100% locally and offline directly in your terminal, providing live ANSI-colored reports, clinical NLP symptom analysis, and automated matplotlib visualization dashboards.
+
+### 1) Environment Setup (conda)
 ```bash
-# 1) Create + activate the environment (conda)
 conda env create -f environment.yml        # OR: conda create -n anemia python=3.11
 conda activate anemia
 pip install -r requirements.txt
+```
 
-# 2) ⭐ Interactive Multimodal Screening (Recommended Primary Workflow)
-#    • Opens native macOS / desktop dialog to select Eyelid & Palm images individually (no folder confusion)
-#    • Full clinical intake form: Age (years), Biological Sex, Pregnancy status, Trimester, Measured Hb, Symptoms
-#    • Natural language symptom parsing with negation handling ("denies breathlessness", "no chest pain")
-#    • Displays 2-row × 3-column master dashboard, isolated 3-panel figures, and standalone heatmaps
-#    • Concludes with WHO/MoHFW triage decision & mandatory Clinical Disclaimer
+### 2) Interactive Terminal Pipeline (Primary Workflow)
+Run the pipeline launcher directly from your terminal:
+```bash
 python run_pipeline.py
-# or: make pipeline
 # or: python -m scripts.analyze_cli
+# or: make pipeline
+```
 
-# 3) Direct CLI Dual-Modality Invocation (Automated / Batch / Scripted)
+**Terminal Pipeline Workflow:**
+- **Individual Selectors:** Prompts you to pick the **Eyelid Image** (primary factor) and **Palm Image** (secondary factor) individually via crash-free native dialogs.
+- **Clinical Intake:** Collects patient factors: Age in years, Biological Sex, Pregnancy status, Trimester, and optional measured Hb.
+- **Terminal Symptom NLP Prompt:** Prompts you to enter patient symptoms in natural language (e.g. *"patient reports severe fatigue and dizziness, denies breathlessness, no chest pain"*). The built-in Clinical NLP engine parses negations, detects WHO danger signs, and extracts clinical entities in real time.
+- **Color-Coded Terminal Output:** Prints an immediate ANSI-colored clinical summary in the terminal with live confidence bars, multimodal fused risk, WHO action codes, and the mandatory medical disclaimer.
+- **Visual Dashboard Window:** Automatically opens the 2-row × 3-column Master Triage Dashboard (`multimodal_triage_dashboard.png`) and saves all figures to `outputs/`.
+
+### 3) Direct Scripted CLI Command (One-Liner)
+You can run the terminal pipeline non-interactively by passing image paths and patient metadata directly via command-line arguments:
+```bash
 python -m scripts.analyze_cli \
   --eye data/sample/pale_pregnant.png \
   --palm "Palm/Anemic-260 (10).png" \
   --age-years 28 --sex female --pregnant --trimester 2 \
   --symptoms "severe fatigue, shortness of breath, dizziness"
+```
 
-# 4) Legacy Single-Image Analyzer (Backward Compatible)
+### 4) Pure Headless / Terminal-Only Mode (`--no-window`)
+For servers, remote SSH sessions, or fast terminal-only inspection without opening GUI windows:
+```bash
+python -m scripts.analyze_cli \
+  --eye data/sample/pale_pregnant.png \
+  --palm "Palm/Anemic-260 (10).png" \
+  --symptoms "severe fatigue, shortness of breath" \
+  --no-window
+```
+
+### 5) Single-Image Terminal Mode (Legacy Backward Compatibility)
+To screen an isolated eyelid or palm image:
+```bash
 python -m scripts.analyze_cli --image data/sample/pale_pregnant.png --modality eye
+```
 
-# 5) Offline FastAPI Service & Self-Contained Web UI
-uvicorn app.main:app --reload
-# → open http://127.0.0.1:8000/        (self-contained web UI — drag-and-drop & triage)
-# → open http://127.0.0.1:8000/docs    (interactive Swagger UI, served from local assets)
-
-# 6) Single Image API Test via cURL
-curl -s -X POST http://127.0.0.1:8000/analyze \
-  -F "image=@data/sample/pale_pregnant.png" \
-  -F 'metadata={"age_months":312,"is_pregnant":true,"trimester":2,"symptoms":["tiredness"]}' \
-  -F "with_gradcam=true" | python -m json.tool
-
-# 7) Batch Processing Folder → CSV "Ministry Dashboard"
+### 6) Terminal Batch Processor (Directory → CSV Report)
+To triage an entire folder of patient images in bulk and produce a CSV dashboard:
+```bash
 python -m scripts.batch_process --mode local --input data/sample --out outputs/triage.csv
 ```
+
+---
+
+## 🌐 (Optional) Alternative Serving: REST API & Web UI
+
+For deployments requiring a browser interface or microservices integration, an offline FastAPI service is also included:
+
+```bash
+uvicorn app.main:app --reload
+# → Web UI: http://127.0.0.1:8000/
+# → Offline Swagger API Docs: http://127.0.0.1:8000/docs
+```
+
 
 ---
 
