@@ -1,0 +1,31 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# ── Datasets (downloaded manually, can be large / credentialed) ──
+data/raw/**
+!data/raw/.gitkeep
+# keep small synthetic demo images that ship with the repo
+!data/sample/**
+
+# ── Model artifacts ──
+ml/checkpoints/*.pt
+ml/checkpoints/*.pth
+ml/checkpoints/*.onnx
+!ml/checkpoints/.gitkeep
+
+# ── Outputs ──
+outputs/
+*.csv
+!tests/**/*.csv
+
+# ── OS / editor ──
+.DS_Store
+.idea/
+.vscode/
+*.log

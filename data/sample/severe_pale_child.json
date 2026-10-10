@@ -1,0 +1,8 @@
+{
+  "patient_id": "S003",
+  "age_months": 36,
+  "sex": "male",
+  "symptoms": [
+    "weakness"
+  ]
+}

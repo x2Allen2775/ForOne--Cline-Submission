@@ -1,0 +1,8 @@
+{
+  "patient_id": "S001",
+  "age_months": 360,
+  "sex": "female",
+  "symptoms": [
+    "mild fatigue"
+  ]
+}

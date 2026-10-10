@@ -1,0 +1,10 @@
+{
+  "patient_id": "S002",
+  "age_months": 312,
+  "sex": "female",
+  "is_pregnant": true,
+  "trimester": 2,
+  "symptoms": [
+    "tiredness"
+  ]
+}

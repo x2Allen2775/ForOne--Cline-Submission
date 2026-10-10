@@ -1,0 +1,48 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Anemia-Screen — Python dependencies (all free, no paid APIs, local-first)
+# Target: Python 3.11, Apple Silicon (M-series) with MPS acceleration
+# ──────────────────────────────────────────────────────────────────────────────
+
+# --- Core numerical / imaging ---
+numpy>=1.26,<2.2
+pandas>=2.1,<2.3
+pillow>=10.2
+opencv-python>=4.9,<4.11
+
+# --- Deep learning (MobileNetV3 via timm) ---
+torch>=2.2
+torchvision>=0.17
+timm>=0.9.16
+
+# --- Data augmentation & training utilities ---
+albumentations>=1.4,<2.0
+scikit-learn>=1.4
+matplotlib>=3.8
+tqdm>=4.66
+
+# --- Explainability (Grad-CAM heatmaps) ---
+grad-cam>=1.5.0
+
+# --- Inference portability ---
+onnx>=1.16
+onnxruntime>=1.17
+onnxscript>=0.1.0  # required by torch>=2.5 torch.onnx.export
+
+# --- API / serving ---
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+pydantic>=2.6
+pydantic-settings>=2.2
+
+# --- Demo / notebook ---
+jupyterlab>=4.1
+ipykernel>=6.29
+
+# --- Config ---
+pyyaml>=6.0
+
+# --- Batch client + tests ---
+requests>=2.31
+pytest>=8.1
+httpx>=0.27

@@ -1,0 +1,65 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Clinical configuration — WHO/MoHFW anemia thresholds & triage parameters.
+#
+# Everything clinical is config-driven (per the Anemia Loop spec §4): you can
+# switch to WHO 2024 trimester-specific cut-offs or MoHFW updates WITHOUT touching
+# code. Hb is measured in g/dL.
+#
+# Source: WHO 2011 haemoglobin classification (used by Anemia Mukt Bharat).
+# NOTE: altitude/smoking adjustments are OUT OF SCOPE for this prototype.
+# ──────────────────────────────────────────────────────────────────────────────
+
+standard: "WHO-2011"
+
+# Hemoglobin band cut-offs (g/dL), per beneficiary group.
+# A band is assigned as the first match scanning severe -> normal.
+hb_bands:
+  default:                 # non-pregnant adults / fallback
+    normal_min: 11.0       # >= 11.0  -> Normal
+    mild_min: 10.0         # 10.0-10.9 -> Mild
+    moderate_min: 7.0      # 7.0-9.9   -> Moderate
+    # < 7.0 -> Severe
+  pregnant:
+    normal_min: 11.0
+    mild_min: 10.0
+    moderate_min: 7.0
+  child_6_59m:             # children 6-59 months
+    normal_min: 11.0
+    mild_min: 10.0
+    moderate_min: 7.0
+
+# Image-risk decision thresholds (probability of anemia, 0-1).
+# Tune these on your validation set to hit the target sensitivity.
+image_risk:
+  high_threshold: 0.60     # >= this -> CONFIRM_48H
+  low_threshold: 0.30      # >= this (or >=2 symptoms) -> CONFIRM_1WEEK
+
+# Symptoms that force an immediate referral (danger signs).
+danger_signs:
+  - breathlessness
+  - breathless_rest
+  - shortness of breath
+  - fainting
+  - syncope
+  - chest pain
+  - chest_pain
+  - severe pallor
+  - severe_pallor
+  - palpitations
+  - confusion
+  - unable to walk
+
+# Pre-eclampsia warning combo for pregnant women (spec §9.1):
+# swelling PLUS (headache OR blurred vision) -> flag BP check.
+preeclampsia_signs:
+  swelling: ["swelling", "oedema", "edema"]
+  neuro: ["headache", "blurred vision", "blurred_vision", "visual disturbance"]
+
+# Follow-up / re-check scheduling (spec §5.1, §12).
+followup:
+  recheck_weeks_min: 4
+  recheck_weeks_max: 8
+  ifa_missed_days_alert: 3
+
+# Number of symptoms that, combined with low image risk, escalates to CONFIRM_1WEEK.
+symptom_escalation_count: 2

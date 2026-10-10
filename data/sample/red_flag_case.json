@@ -1,0 +1,9 @@
+{
+  "patient_id": "S004",
+  "age_months": 300,
+  "sex": "female",
+  "symptoms": [
+    "breathlessness",
+    "fainting"
+  ]
+}
